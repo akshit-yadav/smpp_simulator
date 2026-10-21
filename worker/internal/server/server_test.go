@@ -512,3 +512,37 @@ func TestDLRRetriedAfterErrorResponse(t *testing.T) {
 		t.Fatalf("retry after %v, want ~1s backoff", d)
 	}
 }
+
+func TestSessionsKillAndStats(t *testing.T) {
+	c := testConfig(t)
+	c.DLR.Enabled = false
+	m := startManager(t, c)
+	cl := mustBind(t, c, "trx")
+	for range 3 {
+		cl.submit(t, newSubmit(t, "x", 0))
+		waitResp(t, cl)
+	}
+
+	ss := m.Sessions()
+	if len(ss) != 1 || ss[0].GatewayID != 1 || ss[0].BindType != "trx" || ss[0].SystemID != "vendora" || ss[0].Submits != 3 {
+		t.Fatalf("sessions %+v", ss)
+	}
+	st := m.StatsSnapshot()[1]
+	if st.Accepted != 3 || st.BindOK != 1 || st.Sessions["trx"] != 1 {
+		t.Fatalf("stats %+v", st)
+	}
+
+	if m.KillSession(999999) {
+		t.Fatal("killed a session that does not exist")
+	}
+	if !m.KillSession(ss[0].ID) {
+		t.Fatal("kill failed")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(m.Sessions()) != 0 || m.StatsSnapshot()[1].Sessions["trx"] != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("session still bound after kill")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

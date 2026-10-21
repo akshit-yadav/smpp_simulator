@@ -49,6 +49,18 @@ func (f *fakeManager) Status() map[int64]server.GatewayStatus {
 
 func (f *fakeManager) HasErrors() bool { return false }
 
+func (f *fakeManager) StatsSnapshot() map[int64]server.StatsSnapshot {
+	return map[int64]server.StatsSnapshot{1: {Accepted: 42}}
+}
+
+func (f *fakeManager) Sessions() []server.SessionInfo {
+	return []server.SessionInfo{{ID: 5, GatewayID: 1, BindType: "trx"}}
+}
+
+func (f *fakeManager) KillSession(id uint64) bool { return id == 5 }
+
+func (f *fakeManager) Backlog() (int, int) { return 3, 4 }
+
 func (f *fakeManager) last() []gateway.Config {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -216,9 +228,18 @@ func TestPortCheckCommand(t *testing.T) {
 		return n["fsg:cmd:7"] == 1
 	})
 
-	for port, wantOK := range map[int]bool{20010: true, 20099: false} {
-		id := fmt.Sprintf("req%d", port)
-		rdb.Publish(ctx, "fsg:cmd:7", fmt.Sprintf(`{"type":"port_check","id":"%s","port":%d}`, id, port))
+	cmds := map[string]bool{
+		`{"type":"port_check","id":"a","port":20010}`:  true,
+		`{"type":"port_check","id":"b","port":20099}`:  false,
+		`{"type":"kill_session","id":"c","session":5}`: true,
+		`{"type":"kill_session","id":"d","session":6}`: false,
+		`{"type":"reboot_universe","id":"e","port":1}`: false,
+	}
+	for cmd, wantOK := range cmds {
+		var c command
+		json.Unmarshal([]byte(cmd), &c)
+		id := c.ID
+		rdb.Publish(ctx, "fsg:cmd:7", cmd)
 		res, err := rdb.BLPop(ctx, 2*time.Second, "fsg:reply:"+id).Result()
 		if err != nil {
 			t.Fatal(err)
@@ -229,7 +250,31 @@ func TestPortCheckCommand(t *testing.T) {
 		}
 		json.Unmarshal([]byte(res[1]), &reply)
 		if reply.OK != wantOK || (!wantOK && reply.Error == "") {
-			t.Fatalf("port %d: %+v", port, reply)
+			t.Fatalf("%s: %+v", cmd, reply)
 		}
+	}
+}
+
+func TestPublishesLiveStatsAndSessions(t *testing.T) {
+	rdb := testRedis(t)
+	fc := &fakeControl{}
+	fc.version.Store(1)
+	fc.port.Store(20001)
+	start(t, rdb, fc, "", &fakeManager{})
+	ctx := context.Background()
+	waitFor(t, "live stats", func() bool { return rdb.Exists(ctx, "fsg:stats:7").Val() == 1 })
+
+	var live LiveStats
+	json.Unmarshal([]byte(rdb.Get(ctx, "fsg:stats:7").Val()), &live)
+	if live.Gateways[1].Accepted != 42 || live.DLRPending != 3 || live.DLRQueued != 4 || live.TS == 0 {
+		t.Fatalf("live stats %+v", live)
+	}
+	var sess []server.SessionInfo
+	json.Unmarshal([]byte(rdb.Get(ctx, "fsg:sessions:7").Val()), &sess)
+	if len(sess) != 1 || sess[0].ID != 5 {
+		t.Fatalf("sessions %+v", sess)
+	}
+	if ttl := rdb.TTL(ctx, "fsg:stats:7").Val(); ttl <= 0 || ttl > 10*time.Second {
+		t.Fatalf("ttl %v", ttl)
 	}
 }

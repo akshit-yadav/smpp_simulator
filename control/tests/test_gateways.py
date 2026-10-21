@@ -202,8 +202,10 @@ def test_move_disable_delete(admin, rdb, worker):
     )
     assert internal_config(admin, 2)["gateways"][0]["status"] == "disabled"
 
+    rdb.xadd(f"fsg:dlrq:{gw['id']}", {"j": "{}"})
     assert admin.delete(f"{GW}/{gw['id']}").status_code == 204
     assert internal_config(admin, 2)["gateways"] == []
+    assert not rdb.exists(f"fsg:dlrq:{gw['id']}")  # its queued DLRs go with it
     assert admin.get(f"{GW}/{gw['id']}").status_code == 404
     w2.stop()
 

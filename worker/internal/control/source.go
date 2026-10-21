@@ -5,8 +5,10 @@
 //   - It pulls the full config from the internal API when a change is
 //     published on fsg:cfg:<worker_id>, when (re)subscribing, and when the
 //     60 s version check finds a newer version.
-//   - It answers commands on fsg:cmd:<worker_id> (port_check) and reports
-//     each gateway's listener state to the fsg:gwstatus:<worker_id> hash.
+//   - It answers commands on fsg:cmd:<worker_id> (port_check, kill_session)
+//     and reports each gateway's listener state to fsg:gwstatus:<worker_id>.
+//   - Every second it publishes live counters (fsg:stats:<worker_id>) and
+//     bound sessions (fsg:sessions:<worker_id>) for the panel.
 package control
 
 import (
@@ -45,6 +47,10 @@ type Manager interface {
 	Apply([]gateway.Config) []server.ApplyResult
 	Status() map[int64]server.GatewayStatus
 	HasErrors() bool
+	StatsSnapshot() map[int64]server.StatsSnapshot
+	Sessions() []server.SessionInfo
+	KillSession(id uint64) bool
+	Backlog() (pending, queued int)
 }
 
 type Source struct {
@@ -98,6 +104,7 @@ func (s *Source) Run(ctx context.Context) {
 	defer check.Stop()
 	status := time.NewTicker(15 * time.Second)
 	defer status.Stop()
+	go s.publishLive(ctx)
 	var retry <-chan time.Time
 	backoff := time.Second
 
@@ -153,9 +160,10 @@ func (s *Source) listen(ctx context.Context, poke func()) {
 }
 
 type command struct {
-	Type string `json:"type"`
-	ID   string `json:"id"`
-	Port int    `json:"port"`
+	Type    string `json:"type"`
+	ID      string `json:"id"`
+	Port    int    `json:"port"`
+	Session uint64 `json:"session"`
 }
 
 func (s *Source) handleCommand(ctx context.Context, payload string) {
@@ -169,6 +177,10 @@ func (s *Source) handleCommand(ctx context.Context, payload string) {
 	case "port_check":
 		if err := s.opt.PortCheck(c.Port); err != nil {
 			reply = map[string]any{"ok": false, "error": err.Error()}
+		}
+	case "kill_session":
+		if !s.mgr.KillSession(c.Session) {
+			reply = map[string]any{"ok": false, "error": "session not found"}
 		}
 	default:
 		reply = map[string]any{"ok": false, "error": "unknown command " + c.Type}
@@ -254,6 +266,41 @@ func (s *Source) reportStatus(ctx context.Context) {
 		pipe.HSet(ctx, key, strconv.FormatInt(id, 10), data)
 	}
 	_, _ = pipe.Exec(ctx) // best effort; refreshed every 15 s
+}
+
+// LiveStats is published every second for the panel's live views. Counters
+// are cumulative; the reader computes rates.
+type LiveStats struct {
+	TS         int64                          `json:"ts"` // unix ms
+	Gateways   map[int64]server.StatsSnapshot `json:"gateways"`
+	DLRPending int                            `json:"dlr_pending"`
+	DLRQueued  int                            `json:"dlr_queued"`
+}
+
+func (s *Source) publishLive(ctx context.Context) {
+	id := strconv.Itoa(int(s.opt.WorkerID))
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			pending, queued := s.mgr.Backlog()
+			stats, _ := json.Marshal(LiveStats{
+				TS: now.UnixMilli(), Gateways: s.mgr.StatsSnapshot(), DLRPending: pending, DLRQueued: queued,
+			})
+			sessions := s.mgr.Sessions()
+			if sessions == nil {
+				sessions = []server.SessionInfo{}
+			}
+			sess, _ := json.Marshal(sessions)
+			pipe := s.opt.Redis.Pipeline()
+			pipe.Set(ctx, "fsg:stats:"+id, stats, 10*time.Second)
+			pipe.Set(ctx, "fsg:sessions:"+id, sess, 10*time.Second)
+			_, _ = pipe.Exec(ctx) // best effort; never blocks traffic
+		}
+	}
 }
 
 func (s *Source) readCache() (*Config, error) {

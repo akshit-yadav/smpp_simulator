@@ -78,16 +78,12 @@ def worker_online(stores: Stores, worker_id: int) -> bool:
         return False
 
 
-def port_check(
-    stores: Stores, worker_id: int, port: int, timeout: float
-) -> tuple[bool | None, str]:
-    """Asks the worker to test-bind a port. Returns (True, "") if free,
-    (False, reason) if not, or (None, reason) if the worker did not answer."""
+def command(stores: Stores, worker_id: int, cmd: dict, timeout: float) -> tuple[bool | None, str]:
+    """Sends a command to a worker and waits for its reply. Returns (True, ""),
+    (False, reason), or (None, reason) if the worker did not answer."""
     rid = uuid.uuid4().hex
     try:
-        receivers = stores.redis.publish(
-            cmd_channel(worker_id), json.dumps({"type": "port_check", "id": rid, "port": port})
-        )
+        receivers = stores.redis.publish(cmd_channel(worker_id), json.dumps(cmd | {"id": rid}))
         if receivers == 0:
             return None, "worker is offline"
         reply = stores.redis.blpop([f"fsg:reply:{rid}"], timeout=timeout)
@@ -99,6 +95,21 @@ def port_check(
     return bool(data.get("ok")), data.get("error", "")
 
 
+def port_check(
+    stores: Stores, worker_id: int, port: int, timeout: float
+) -> tuple[bool | None, str]:
+    """Asks the worker to test-bind a port."""
+    return command(stores, worker_id, {"type": "port_check", "port": port}, timeout)
+
+
+def live_json(stores: Stores, key: str):
+    try:
+        raw = stores.redis.get(key)
+    except RedisError:
+        return None
+    return json.loads(raw) if raw else None
+
+
 def runtime_status(stores: Stores, worker_id: int) -> dict[int, dict]:
     """Per-gateway listener state as reported by the worker."""
     try:
@@ -106,3 +117,11 @@ def runtime_status(stores: Stores, worker_id: int) -> dict[int, dict]:
     except RedisError:
         return {}
     return {int(k): json.loads(v) for k, v in raw.items()}
+
+
+def forget_gateway(stores: Stores, gateway_id: int) -> None:
+    """Drops a deleted gateway's persisted DLR queue (best effort)."""
+    try:
+        stores.redis.delete(f"fsg:dlrq:{gateway_id}")
+    except RedisError as exc:
+        log.warning("could not delete DLR queue of gateway %s: %s", gateway_id, type(exc).__name__)

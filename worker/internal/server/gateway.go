@@ -22,11 +22,11 @@ type runtimeConfig struct {
 
 // Gateway is one running SMPP listener and its sessions.
 type Gateway struct {
-	m       *Manager
-	id      int64
-	cfg     atomic.Pointer[runtimeConfig]
-	ln      net.Listener
-	metrics *gwMetrics
+	m     *Manager
+	id    int64
+	cfg   atomic.Pointer[runtimeConfig]
+	ln    net.Listener
+	stats *Stats
 
 	mu        sync.Mutex
 	sessions  map[*Session]struct{}
@@ -49,7 +49,7 @@ func (m *Manager) newGateway(rc *runtimeConfig, ln net.Listener) *Gateway {
 		m:        m,
 		id:       rc.ID,
 		ln:       ln,
-		metrics:  m.metrics.forGateway(rc.ID),
+		stats:    m.statsFor(rc.ID),
 		sessions: map[*Session]struct{}{},
 	}
 	gw.cfg.Store(rc)

@@ -63,16 +63,16 @@ func (o *Options) defaults() {
 const wheelTick = 5 * time.Millisecond
 
 type Manager struct {
-	opt     Options
-	log     *slog.Logger
-	ids     *msgid.Generator
-	wheel   *timewheel.Wheel[*dlrJob]
-	queue   *dlrQueue
-	metrics *Metrics
+	opt   Options
+	log   *slog.Logger
+	ids   *msgid.Generator
+	wheel *timewheel.Wheel[*dlrJob]
+	queue *dlrQueue
 
 	mu       sync.Mutex // serialises Apply and shutdown
 	gateways map[int64]*Gateway
 	status   map[int64]GatewayStatus
+	stats    map[int64]*Stats                   // by gateway ID; kept across listener restarts
 	byID     atomic.Pointer[map[int64]*Gateway] // lock-free snapshot for the hot path
 }
 
@@ -85,10 +85,11 @@ func NewManager(opt Options) *Manager {
 		wheel:    timewheel.New[*dlrJob](wheelTick, time.Now()),
 		gateways: map[int64]*Gateway{},
 		status:   map[int64]GatewayStatus{},
+		stats:    map[int64]*Stats{},
 	}
 	m.byID.Store(&map[int64]*Gateway{})
 	m.queue = newDLRQueue(opt.Redis, opt.Log)
-	m.metrics = newMetrics(opt.Registerer, m)
+	registerMetrics(opt.Registerer, m)
 	return m
 }
 
@@ -117,7 +118,8 @@ func (m *Manager) Apply(cfgs []gateway.Config) []ApplyResult {
 		if !want[id] {
 			gw.stop("removed")
 			delete(m.gateways, id)
-			m.metrics.dropGateway(id)
+			delete(m.stats, id)
+			m.queue.forget(id)
 			results = append(results, ApplyResult{ID: id, Action: "removed"})
 		}
 	}
@@ -277,7 +279,7 @@ func (m *Manager) drainQueues() {
 		}
 		for _, j := range m.queue.pop(id, 5000) {
 			if now.Sub(j.QueuedAt) > m.opt.QueueMaxAge {
-				gw.metrics.dlrExpire.Inc()
+				gw.stats.DLRExpired.Add(1)
 				continue
 			}
 			m.dispatch(j)
@@ -317,6 +319,74 @@ func (m *Manager) updateStatus(cfgs []gateway.Config, results []ApplyResult) {
 		next[c.ID] = st
 	}
 	m.status = next
+}
+
+// statsFor returns the gateway's Stats, creating them once. Caller holds m.mu.
+func (m *Manager) statsFor(id int64) *Stats {
+	s := m.stats[id]
+	if s == nil {
+		s = &Stats{}
+		m.stats[id] = s
+	}
+	return s
+}
+
+// StatsSnapshot returns every known gateway's counters.
+func (m *Manager) StatsSnapshot() map[int64]StatsSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[int64]StatsSnapshot, len(m.stats))
+	for id, s := range m.stats {
+		out[id] = s.Snapshot()
+	}
+	return out
+}
+
+// boundSessions returns every bound session across gateways.
+func (m *Manager) boundSessions() []*Session {
+	m.mu.Lock()
+	gws := make([]*Gateway, 0, len(m.gateways))
+	for _, gw := range m.gateways {
+		gws = append(gws, gw)
+	}
+	m.mu.Unlock()
+	var out []*Session
+	for _, gw := range gws {
+		gw.mu.Lock()
+		for s := range gw.sessions {
+			if s.bound.Load() {
+				out = append(out, s)
+			}
+		}
+		gw.mu.Unlock()
+	}
+	return out
+}
+
+// Backlog returns DLRs waiting in the timing wheel and DLRs queued for an
+// absent receiver.
+func (m *Manager) Backlog() (pending, queued int) { return m.wheel.Len(), m.queue.TotalLen() }
+
+// Sessions describes every bound session.
+func (m *Manager) Sessions() []SessionInfo {
+	ss := m.boundSessions()
+	out := make([]SessionInfo, len(ss))
+	for i, s := range ss {
+		out[i] = s.info()
+	}
+	return out
+}
+
+// KillSession unbinds and closes a session. False if it is not found.
+func (m *Manager) KillSession(id uint64) bool {
+	for _, s := range m.boundSessions() {
+		if s.id == id {
+			m.log.Info("session killed by admin", "gateway_id", s.gw.id, "session", id, "remote", s.remote)
+			s.unbindAndClose()
+			return true
+		}
+	}
+	return false
 }
 
 // Status returns every configured gateway's listener state.

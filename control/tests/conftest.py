@@ -112,6 +112,7 @@ class FakeWorker:
     def __init__(self, rdb, worker_id: int, busy_ports=(), exclude=(20050,)):
         self.rdb, self.id, self.busy = rdb, worker_id, set(busy_ports)
         self.events: list[dict] = []
+        self.killed: list[int] = []
         rdb.set(
             f"fsg:worker:{worker_id}:hb",
             json.dumps(
@@ -143,10 +144,15 @@ class FakeWorker:
             if msg["channel"].startswith("fsg:cfg:"):
                 self.events.append(data)
             elif data.get("type") == "port_check":
-                ok = data["port"] not in self.busy
-                key = f"fsg:reply:{data['id']}"
-                self.rdb.rpush(key, json.dumps({"ok": ok, "error": "" if ok else "address in use"}))
-                self.rdb.expire(key, 30)
+                self._reply(data["id"], data["port"] not in self.busy, "address in use")
+            elif data.get("type") == "kill_session":
+                self.killed.append(data["session"])
+                self._reply(data["id"], data["session"] == 5, "session not found")
+
+    def _reply(self, rid, ok, error):
+        key = f"fsg:reply:{rid}"
+        self.rdb.rpush(key, json.dumps({"ok": ok, "error": "" if ok else error}))
+        self.rdb.expire(key, 30)
 
     def stop(self):
         self.pubsub.close()

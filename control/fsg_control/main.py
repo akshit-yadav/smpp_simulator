@@ -19,6 +19,7 @@ from fsg_control.api import (
     gateways,
     health,
     internal,
+    live,
     profiles,
     workers,
 )
@@ -77,7 +78,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
     app.state.cipher = cipher
 
     app.include_router(health.router)
-    for module in (auth, workers, gateways, profiles, catalog, defaults, audit_log):
+    for module in (auth, workers, gateways, live, profiles, catalog, defaults, audit_log):
         app.include_router(module.router, prefix="/api/v1")
     app.include_router(internal.router)
 

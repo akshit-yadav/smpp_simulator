@@ -41,6 +41,9 @@ type Session struct {
 
 	bound    atomic.Bool
 	bindType string
+	systemID string
+	boundAt  time.Time
+	submits  atomic.Uint64
 	bucket   *ratelimit.Bucket // per-bind TPS
 	lastCfg  *runtimeConfig
 
@@ -181,19 +184,19 @@ func (s *Session) handleBind(p pdu.Packet) bool {
 
 	log := s.m.log.With("gateway_id", s.gw.id, "session", s.id, "remote", s.remote, "system_id", b.SystemID, "bind_type", bt)
 	if status != pdu.ESME_ROK {
-		s.gw.metrics.bindFail.Inc()
+		s.gw.stats.BindFail.Add(1)
 		log.Warn("bind rejected", "status", status.String())
 		s.respond(resp, status, p.Sequence, failedBindBody(resp))
 		s.flushAndClose()
 		return false
 	}
 
-	s.bindType = bt
+	s.bindType, s.systemID, s.boundAt = bt, b.SystemID, time.Now().UTC()
 	s.bucket = ratelimit.New(rc.TPS.Limit)
 	s.lastCfg = rc
 	s.bound.Store(true)
-	s.gw.metrics.bindOK.Inc()
-	s.gw.metrics.sessions[bt].Inc()
+	s.gw.stats.BindOK.Add(1)
+	s.gw.stats.Sessions(bt).Add(1)
 	body := pdu.BindResp{SystemID: smscName, TLVs: pdu.TLVs{pdu.ByteTLV(pdu.TagSCInterfaceVersion, 0x34)}}.Append(nil)
 	s.respond(resp, pdu.ESME_ROK, p.Sequence, body)
 	if bt != gateway.BindTX {
@@ -214,6 +217,7 @@ func failedBindBody(resp pdu.CommandID) []byte {
 }
 
 func (s *Session) handleSubmit(p pdu.Packet) {
+	s.submits.Add(1)
 	if s.bindType == gateway.BindRX {
 		s.respond(pdu.SubmitSMResp, pdu.ESME_RINVBNDSTS, p.Sequence, nil)
 		return
@@ -226,7 +230,7 @@ func (s *Session) handleSubmit(p pdu.Packet) {
 
 	sm, err := pdu.DecodeSM(p.Body)
 	if err != nil {
-		s.gw.metrics.invalid.Inc()
+		s.gw.stats.Invalid.Add(1)
 		s.respond(pdu.SubmitSMResp, submitDecodeStatus(err), p.Sequence, nil)
 		return
 	}
@@ -236,14 +240,14 @@ func (s *Session) handleSubmit(p pdu.Packet) {
 		bucket = rc.gwBucket
 	}
 	if !bucket.Allow() {
-		s.gw.metrics.throttled.Inc()
+		s.gw.stats.Throttled.Add(1)
 		s.respond(pdu.SubmitSMResp, pdu.ESME_RTHROTTLED, p.Sequence, nil)
 		return
 	}
 
 	o := rc.picker.Pick()
 	if !o.Accepted() {
-		s.gw.metrics.rejected.Inc()
+		s.gw.stats.Rejected.Add(1)
 		s.respond(pdu.SubmitSMResp, o.CommandStatus, p.Sequence, nil)
 		return
 	}
@@ -252,7 +256,7 @@ func (s *Session) handleSubmit(p pdu.Packet) {
 	id := s.m.ids.Next()
 	hexID := msgid.Hex(id)
 	s.respond(pdu.SubmitSMResp, pdu.ESME_ROK, p.Sequence, pdu.MessageIDResp{MessageID: hexID}.Append(nil))
-	s.gw.metrics.accepted.Inc()
+	s.gw.stats.Accepted.Add(1)
 	s.m.scheduleDLR(rc, &sm, id, o, now)
 }
 
@@ -349,9 +353,31 @@ func (s *Session) close() {
 		wasBound := s.bound.Load()
 		s.gw.removeSession(s, wasBound)
 		if wasBound {
-			s.gw.metrics.sessions[s.bindType].Dec()
+			s.gw.stats.Sessions(s.bindType).Add(-1)
 		}
 		s.requeueDLRs()
 		s.m.log.Info("session closed", "gateway_id", s.gw.id, "session", s.id, "remote", s.remote, "bound", wasBound)
 	})
+}
+
+// SessionInfo describes one bound session for the control plane.
+type SessionInfo struct {
+	ID        uint64    `json:"id"`
+	GatewayID int64     `json:"gateway_id"`
+	BindType  string    `json:"bind_type"`
+	SystemID  string    `json:"system_id"`
+	Remote    string    `json:"remote"`
+	BoundAt   time.Time `json:"bound_at"`
+	Submits   uint64    `json:"submits"`
+	DLRsOut   int       `json:"dlrs_in_flight"`
+}
+
+func (s *Session) info() SessionInfo {
+	s.pendMu.Lock()
+	inflight := len(s.pending)
+	s.pendMu.Unlock()
+	return SessionInfo{
+		ID: s.id, GatewayID: s.gw.id, BindType: s.bindType, SystemID: s.systemID,
+		Remote: s.remote, BoundAt: s.boundAt, Submits: s.submits.Load(), DLRsOut: inflight,
+	}
 }

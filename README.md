@@ -13,8 +13,8 @@ behaviour, MO traffic and TPS limit.
 | M1 Worker core: SMPP 3.4 codec, bind auth, `submit_sm`, `enquire_link`, `unbind`, many listeners | ✅ Done |
 | M2 Hot path: outcome engine, TPS limits, timing-wheel DLRs, DLR delivery/queue/retry, load generator | ✅ Done (short benchmark runs, see below) |
 | M3 Control plane: admin login + TOTP, audit log, gateway/profile/catalog/defaults API, 3-layer port check, config sync, worker registry | ✅ Done. Manage gateways through the REST API (Swagger UI at `/api/docs`) |
-| M4 Events and reports (ClickHouse) | ⏳ Next |
-| M5 Panel screens | ⏳ Not started. Until then use the API |
+| M4 Events and reports (ClickHouse); the panel's Reports and Message search screens | ⏳ Next |
+| M5 Panel: login + TOTP, live dashboard, gateways list/editor/detail (sessions with kill), outcome profiles with preview, error catalog, defaults, workers, settings & audit | ✅ Done |
 | M6–M9 `submit_multi`/`data_sm`/`query_sm`…, overrides, MO, licensing, hardening | ⏳ Not started |
 
 See [docs/build-prompt.md](docs/build-prompt.md) for the full scope.
@@ -64,9 +64,28 @@ Then:
 | Worker metrics | http://127.0.0.1:9108/metrics |
 | SMPP listeners | each gateway's port (in `FSG_PORT_RANGE`, default 20000–20999) |
 
+## Admin panel
+
+Open http://127.0.0.1:8080/ and sign in as `admin` with the `FSG_ADMIN_PASSWORD` from
+`.env` (on a remote server, forward port 8080 with VS Code or `ssh -L 8080:127.0.0.1:8080`).
+
+| Screen | What you can do |
+|---|---|
+| Dashboard | Live submit/throttle/reject and DLR rates (2 s refresh), sessions, listener state, worker DLR backlog |
+| Gateways | List, search, filter; create and edit (Connection / Outcomes / DLR / Limits tabs) with port check and next-free-port; every setting can follow the default or be custom |
+| Gateway detail | Live chart, bound sessions with **Kill**, password reveal, effective settings, outcome mix, change history, enable/disable/delete |
+| Outcome profiles | Shared profiles with fixed/random/weighted modes, exact or probabilistic distribution, seed, and a 10,000-message preview |
+| Error catalog | DLR `err:` codes (system + custom), SMPP command statuses (+ vendor 0x400–0x4FF), DLR statuses |
+| Defaults | Global defaults every gateway can follow |
+| Workers | Registry, rename, drain/activate, remove offline workers |
+| Settings & audit | Change password, turn on TOTP (QR code), audit log of every change |
+
+Reports, Message search, MO, Live overrides and Licence appear in the menu with the
+milestone that delivers them.
+
 ## Manage gateways (REST API)
 
-Log in with `admin` and the `FSG_ADMIN_PASSWORD` from `.env`. The interactive API docs at
+Everything the panel does goes through the REST API. The interactive API docs at
 http://127.0.0.1:8080/api/docs work in the browser: call `POST /api/v1/auth/login` there
 first, and the session cookie authorises the rest. With curl:
 
@@ -143,7 +162,7 @@ make bin
 It prints throughput, `submit_sm_resp` latency percentiles, throttled/rejected counts,
 DLR status counts and DLR delay, and exits non-zero on unanswered submits or missing DLRs.
 
-**Watch it.** Worker metrics at http://127.0.0.1:9108/metrics: `fsg_submit_total`,
+**Watch it.** The dashboard and gateway pages update live. Worker metrics at http://127.0.0.1:9108/metrics: `fsg_submit_total`,
 `fsg_dlr_total`, `fsg_bind_total`, `fsg_sessions`, `fsg_dlr_pending`, `fsg_dlr_queued`.
 `GET /api/v1/gateways` shows each gateway's listener state (`runtime`) as the worker reports it.
 

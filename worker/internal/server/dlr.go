@@ -117,7 +117,7 @@ func (m *Manager) dispatch(j *dlrJob) {
 		default: // that session is backed up; try the next one
 		}
 	}
-	gw.metrics.dlrQueued.Inc()
+	gw.stats.DLRQueued.Add(1)
 	if j.QueuedAt.IsZero() {
 		j.QueuedAt = time.Now()
 	}
@@ -129,10 +129,10 @@ func (m *Manager) dispatch(j *dlrJob) {
 func (m *Manager) retryDLR(gw *Gateway, j *dlrJob) {
 	j.Attempts++
 	if j.Attempts > m.opt.DLRRetries {
-		gw.metrics.dlrFailed.Inc()
+		gw.stats.DLRFailed.Add(1)
 		return
 	}
-	gw.metrics.dlrRetried.Inc()
+	gw.stats.DLRRetried.Add(1)
 	m.wheel.Add(time.Now().Add(time.Second<<(j.Attempts-1)), j)
 }
 
@@ -158,7 +158,7 @@ func (s *Session) dlrLoop() {
 			s.pending[seq] = &inflight{job: j, sentAt: now}
 			s.pendMu.Unlock()
 			if s.send(encodeDLR(s.gw.config(), j, seq, now)) {
-				s.gw.metrics.dlrSent.Inc()
+				s.gw.stats.DLRSent.Add(1)
 			}
 		}
 	}
@@ -187,7 +187,7 @@ func (s *Session) handleDeliverResp(p pdu.Packet) {
 	}
 	<-s.window
 	if p.CommandID == pdu.DeliverSMResp && p.Status == pdu.ESME_ROK {
-		s.gw.metrics.dlrOK.Inc()
+		s.gw.stats.DLRAck.Add(1)
 		return
 	}
 	s.m.retryDLR(s.gw, f.job)

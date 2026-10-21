@@ -2,83 +2,120 @@ package server
 
 import (
 	"strconv"
+	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Metrics are registered once per Manager. Per-gateway children are resolved
-// when a gateway starts, so the hot path only increments a counter.
-type Metrics struct {
-	submits  *prometheus.CounterVec
-	dlrs     *prometheus.CounterVec
-	binds    *prometheus.CounterVec
-	sessions *prometheus.GaugeVec
-	pending  prometheus.GaugeFunc
-	queued   prometheus.GaugeFunc
+// Stats are one gateway's counters. The Manager keeps them by gateway ID, so
+// they survive listener restarts. They feed both Prometheus and the live
+// counters published to the control plane; the hot path only does atomic adds.
+type Stats struct {
+	Accepted, Rejected, Throttled, Invalid            atomic.Uint64
+	DLRSent, DLRAck, DLRRetried, DLRFailed, DLRQueued atomic.Uint64
+	DLRExpired, BindOK, BindFail                      atomic.Uint64
+	SessionsTX, SessionsRX, SessionsTRX               atomic.Int64
 }
 
-func newMetrics(reg prometheus.Registerer, m *Manager) *Metrics {
-	mt := &Metrics{
-		submits: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "fsg_submit_total", Help: "submit_sm received, by result.",
-		}, []string{"gateway", "result"}),
-		dlrs: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "fsg_dlr_total", Help: "DLR events, by result.",
-		}, []string{"gateway", "result"}),
-		binds: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "fsg_bind_total", Help: "Bind attempts, by result.",
-		}, []string{"gateway", "result"}),
-		sessions: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "fsg_sessions", Help: "Bound SMPP sessions.",
-		}, []string{"gateway", "bind_type"}),
-		pending: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name: "fsg_dlr_pending", Help: "DLRs waiting in the timing wheel.",
-		}, func() float64 { return float64(m.wheel.Len()) }),
-		queued: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name: "fsg_dlr_queued", Help: "DLRs queued because no receiver is bound.",
-		}, func() float64 { return float64(m.queue.TotalLen()) }),
+// Sessions returns the bound-session gauge for a bind type.
+func (s *Stats) Sessions(bindType string) *atomic.Int64 {
+	switch bindType {
+	case "tx":
+		return &s.SessionsTX
+	case "rx":
+		return &s.SessionsRX
 	}
-	if reg != nil {
-		reg.MustRegister(mt.submits, mt.dlrs, mt.binds, mt.sessions, mt.pending, mt.queued)
-	}
-	return mt
+	return &s.SessionsTRX
 }
 
-// gwMetrics are one gateway's pre-resolved counters.
-type gwMetrics struct {
-	accepted, rejected, throttled, invalid                      prometheus.Counter
-	dlrSent, dlrOK, dlrRetried, dlrFailed, dlrQueued, dlrExpire prometheus.Counter
-	bindOK, bindFail                                            prometheus.Counter
-	sessions                                                    map[string]prometheus.Gauge
+// StatsSnapshot is a point-in-time copy of Stats (cumulative counters).
+type StatsSnapshot struct {
+	Accepted   uint64           `json:"accepted"`
+	Rejected   uint64           `json:"rejected"`
+	Throttled  uint64           `json:"throttled"`
+	Invalid    uint64           `json:"invalid"`
+	DLRSent    uint64           `json:"dlr_sent"`
+	DLRAck     uint64           `json:"dlr_acknowledged"`
+	DLRRetried uint64           `json:"dlr_retried"`
+	DLRFailed  uint64           `json:"dlr_failed"`
+	DLRQueued  uint64           `json:"dlr_queued"`
+	DLRExpired uint64           `json:"dlr_expired"`
+	BindOK     uint64           `json:"bind_ok"`
+	BindFail   uint64           `json:"bind_failed"`
+	Sessions   map[string]int64 `json:"sessions"`
 }
 
-func (mt *Metrics) forGateway(id int64) *gwMetrics {
-	g := strconv.FormatInt(id, 10)
-	return &gwMetrics{
-		accepted:   mt.submits.WithLabelValues(g, "accepted"),
-		rejected:   mt.submits.WithLabelValues(g, "rejected"),
-		throttled:  mt.submits.WithLabelValues(g, "throttled"),
-		invalid:    mt.submits.WithLabelValues(g, "invalid"),
-		dlrSent:    mt.dlrs.WithLabelValues(g, "sent"),
-		dlrOK:      mt.dlrs.WithLabelValues(g, "acknowledged"),
-		dlrRetried: mt.dlrs.WithLabelValues(g, "retried"),
-		dlrFailed:  mt.dlrs.WithLabelValues(g, "failed"),
-		dlrQueued:  mt.dlrs.WithLabelValues(g, "queued"),
-		dlrExpire:  mt.dlrs.WithLabelValues(g, "expired"),
-		bindOK:     mt.binds.WithLabelValues(g, "ok"),
-		bindFail:   mt.binds.WithLabelValues(g, "failed"),
-		sessions: map[string]prometheus.Gauge{
-			"tx":  mt.sessions.WithLabelValues(g, "tx"),
-			"rx":  mt.sessions.WithLabelValues(g, "rx"),
-			"trx": mt.sessions.WithLabelValues(g, "trx"),
+func (s *Stats) Snapshot() StatsSnapshot {
+	return StatsSnapshot{
+		Accepted: s.Accepted.Load(), Rejected: s.Rejected.Load(), Throttled: s.Throttled.Load(),
+		Invalid: s.Invalid.Load(), DLRSent: s.DLRSent.Load(), DLRAck: s.DLRAck.Load(),
+		DLRRetried: s.DLRRetried.Load(), DLRFailed: s.DLRFailed.Load(), DLRQueued: s.DLRQueued.Load(),
+		DLRExpired: s.DLRExpired.Load(), BindOK: s.BindOK.Load(), BindFail: s.BindFail.Load(),
+		Sessions: map[string]int64{
+			"tx": s.SessionsTX.Load(), "rx": s.SessionsRX.Load(), "trx": s.SessionsTRX.Load(),
 		},
 	}
 }
 
-func (mt *Metrics) dropGateway(id int64) {
-	g := prometheus.Labels{"gateway": strconv.FormatInt(id, 10)}
-	mt.submits.DeletePartialMatch(g)
-	mt.dlrs.DeletePartialMatch(g)
-	mt.binds.DeletePartialMatch(g)
-	mt.sessions.DeletePartialMatch(g)
+// collector exposes every gateway's Stats to Prometheus at scrape time.
+type collector struct {
+	m                         *Manager
+	submits, dlrs, binds, ses *prometheus.Desc
+}
+
+func newCollector(m *Manager) *collector {
+	labels := []string{"gateway", "result"}
+	return &collector{
+		m:       m,
+		submits: prometheus.NewDesc("fsg_submit_total", "submit_sm received, by result.", labels, nil),
+		dlrs:    prometheus.NewDesc("fsg_dlr_total", "DLR events, by result.", labels, nil),
+		binds:   prometheus.NewDesc("fsg_bind_total", "Bind attempts, by result.", labels, nil),
+		ses:     prometheus.NewDesc("fsg_sessions", "Bound SMPP sessions.", []string{"gateway", "bind_type"}, nil),
+	}
+}
+
+func (c *collector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- c.submits
+	ch <- c.dlrs
+	ch <- c.binds
+	ch <- c.ses
+}
+
+func (c *collector) Collect(ch chan<- prometheus.Metric) {
+	for id, s := range c.m.StatsSnapshot() {
+		g := strconv.FormatInt(id, 10)
+		count := func(d *prometheus.Desc, v uint64, result string) {
+			ch <- prometheus.MustNewConstMetric(d, prometheus.CounterValue, float64(v), g, result)
+		}
+		count(c.submits, s.Accepted, "accepted")
+		count(c.submits, s.Rejected, "rejected")
+		count(c.submits, s.Throttled, "throttled")
+		count(c.submits, s.Invalid, "invalid")
+		count(c.dlrs, s.DLRSent, "sent")
+		count(c.dlrs, s.DLRAck, "acknowledged")
+		count(c.dlrs, s.DLRRetried, "retried")
+		count(c.dlrs, s.DLRFailed, "failed")
+		count(c.dlrs, s.DLRQueued, "queued")
+		count(c.dlrs, s.DLRExpired, "expired")
+		count(c.binds, s.BindOK, "ok")
+		count(c.binds, s.BindFail, "failed")
+		for bt, n := range s.Sessions {
+			ch <- prometheus.MustNewConstMetric(c.ses, prometheus.GaugeValue, float64(n), g, bt)
+		}
+	}
+}
+
+func registerMetrics(reg prometheus.Registerer, m *Manager) {
+	if reg == nil {
+		return
+	}
+	reg.MustRegister(
+		newCollector(m),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "fsg_dlr_pending", Help: "DLRs waiting in the timing wheel.",
+		}, func() float64 { return float64(m.wheel.Len()) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "fsg_dlr_queued", Help: "DLRs queued because no receiver is bound.",
+		}, func() float64 { return float64(m.queue.TotalLen()) }),
+	)
 }

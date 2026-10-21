@@ -107,6 +107,18 @@ func (q *dlrQueue) pop(id int64, n int) []*dlrJob {
 	return out
 }
 
+// forget drops a removed gateway's in-memory queue. Its Redis stream is left
+// alone: if the gateway moved to another worker, that worker restores it; if
+// it was deleted, the control plane deletes the stream.
+func (q *dlrQueue) forget(id int64) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if g := q.gws[id]; g != nil {
+		q.total.Add(-int64(len(g.items)))
+		delete(q.gws, id)
+	}
+}
+
 func (q *dlrQueue) gatewaysWithItems() []int64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()

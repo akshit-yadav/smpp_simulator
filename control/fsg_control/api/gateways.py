@@ -327,6 +327,7 @@ def delete_gateway(gateway_id: int, request: Request, db: DB, admin: Admin, stor
     db.delete(gw)
     db.commit()
     changes.publish(stores)
+    sync.forget_gateway(stores, gateway_id)
 
 
 @router.post("/gateways/{gateway_id}/reveal-password")
