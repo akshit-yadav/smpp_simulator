@@ -149,40 +149,53 @@ def test_update_defaults_and_versions(admin, worker):
     assert diff["max_binds"] == [3, None] and diff["password"] == "*****"
 
 
-def test_custom_outcome_profile(admin, worker):
-    custom = {
-        "name": "ignored",
-        "mode": "weighted",
-        "distribution": "exact",
-        "entries": [
-            {"name": "ok", "dlr_status": "DELIVRD", "weight_bp": 9000},
-            {"name": "template", "dlr_status": "REJECTD", "dlr_error": "T01", "weight_bp": 900},
-            {"name": "vendor reject", "command_status": 0x401, "weight_bp": 100},
-        ],
-    }
-    # Vendor code 0x401 must exist in the catalog first.
-    r = admin.post(GW, json=new_gw(custom_outcome=custom))
-    assert r.status_code == 422 and "0x401" in r.json()["detail"]
-    assert (
-        admin.post(
-            "/api/v1/catalog/command-statuses", json={"code": 0x401, "name": "VENDOR_BLOCKED"}
-        ).status_code
-        == 201
-    )
+def test_dlr_rule_choice(admin, worker):
+    rule = admin.post(
+        "/api/v1/dlr-rules",
+        json={
+            "name": "templates",
+            "mode": "weighted",
+            "distribution": "exact",
+            "entries": [
+                {"name": "ok", "dlr_status": "DELIVRD", "weight_bp": 9000},
+                {"name": "template", "dlr_status": "REJECTD", "dlr_error": "901", "weight_bp": 900},
+                {"name": "throttled", "command_status": 0x58, "weight_bp": 100},
+            ],
+        },
+    ).json()
+    assert admin.post(GW, json=new_gw(dlr_rule_id=9999)).status_code == 422
 
-    gw = admin.post(GW, json=new_gw(custom_outcome=custom)).json()
-    assert gw["custom_outcome"] is True
+    gw = admin.post(GW, json=new_gw(dlr_rule_id=rule["id"])).json()
+    assert gw["dlr_rule_name"] == "templates" and gw["settings"]["dlr_rule_id"] == rule["id"]
     out = internal_config(admin)["gateways"][0]["outcome"]
     assert out["distribution"] == "exact" and len(out["outcomes"]) == 3
-    t01 = out["outcomes"][1]
-    assert t01["dlr_error"] == "T01" and t01["dlr_text"] == "Template Mismatch"
+    t = out["outcomes"][1]
+    assert t["dlr_error"] == "901" and t["dlr_text"] == "Template Mismatch"
     assert "dlr_status" not in out["outcomes"][2]
+    assert admin.get(f"{GW}/{gw['id']}/dlr-rule").json()["name"] == "templates"
 
-    # Custom profiles are hidden from the shared list and removed with the gateway.
-    assert all(p["owner_gateway_id"] is None for p in admin.get("/api/v1/profiles").json())
-    assert len(admin.get("/api/v1/profiles", params={"include_custom": True}).json()) == 3
-    assert admin.delete(f"{GW}/{gw['id']}").status_code == 204
-    assert len(admin.get("/api/v1/profiles", params={"include_custom": True}).json()) == 2
+    # Back to the default rule.
+    g = admin.patch(f"{GW}/{gw['id']}", json={"dlr_rule_id": None}).json()
+    assert g["dlr_rule_name"] == "All delivered" and g["settings"]["dlr_rule_id"] is None
+
+
+def test_port_change_needs_stopped_gateway(admin, worker):
+    gw = admin.post(GW, json=new_gw()).json()
+    other = admin.post(GW, json=new_gw(name="b", port=20002, system_id="b")).json()
+
+    r = admin.patch(f"{GW}/{gw['id']}", json={"port": 20005})
+    assert r.status_code == 409 and "Stop the gateway" in r.json()["detail"]
+    assert admin.get(f"{GW}/{gw['id']}").json()["port"] == 20001
+
+    assert admin.patch(f"{GW}/{gw['id']}", json={"status": "disabled"}).status_code == 200
+    # Still no two gateways on one port, even if the other one is the stopped one.
+    r = admin.patch(f"{GW}/{gw['id']}", json={"port": other["port"]})
+    assert r.status_code == 409 and "already in use" in r.json()["detail"]["message"]
+    r = admin.patch(f"{GW}/{gw['id']}", json={"port": 20005})
+    assert r.status_code == 200 and r.json()["port"] == 20005
+    assert admin.patch(f"{GW}/{gw['id']}", json={"status": "active"}).json()["status"] == "active"
+    # Other edits to a running gateway are fine.
+    assert admin.patch(f"{GW}/{gw['id']}", json={"tps_limit": 10}).status_code == 200
 
 
 def test_move_disable_delete(admin, rdb, worker):
@@ -192,6 +205,8 @@ def test_move_disable_delete(admin, rdb, worker):
     sync_worker_registry(admin.app.state.stores)
     gw = admin.post(GW, json=new_gw(worker_id=1)).json()
 
+    assert admin.patch(f"{GW}/{gw['id']}", json={"worker_id": 2}).status_code == 409  # running
+    admin.patch(f"{GW}/{gw['id']}", json={"status": "disabled"})
     r = admin.patch(f"{GW}/{gw['id']}", json={"worker_id": 2})
     assert r.status_code == 200 and r.json()["ip"] == "10.0.0.2"
     assert internal_config(admin, 1)["gateways"] == []

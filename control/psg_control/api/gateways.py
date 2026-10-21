@@ -1,22 +1,14 @@
 from contextlib import nullcontext
 
 from fastapi import APIRouter, HTTPException, Request
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from psg_control import audit, ports, resolve, sync
 from psg_control.api.deps import DB, Admin, CipherDep, StoresDep
-from psg_control.api.profiles import apply as apply_profile
-from psg_control.models import SETTING_COLUMNS, Defaults, Gateway, OutcomeProfile, Worker
-from psg_control.schemas import (
-    GatewayCreate,
-    GatewayOut,
-    GatewayUpdate,
-    ProfileIn,
-    ProfileOut,
-    Settings,
-)
+from psg_control.models import SETTING_COLUMNS, Defaults, DLRRule, Gateway, Worker
+from psg_control.schemas import GatewayCreate, GatewayOut, GatewayUpdate, RuleOut, Settings
 from psg_control.stores import Stores
 
 router = APIRouter(tags=["gateways"])
@@ -54,37 +46,9 @@ def check_effective(eff: dict) -> None:
         )
 
 
-def check_profile_choice(db: Session, profile_id: int | None, gateway_id: int | None) -> None:
-    if profile_id is None:
-        return
-    p = db.get(OutcomeProfile, profile_id)
-    if p is None or (p.owner_gateway_id is not None and p.owner_gateway_id != gateway_id):
-        raise HTTPException(status_code=422, detail="outcome_profile_id must be a shared profile.")
-
-
-def custom_profile_name(gw: Gateway) -> str:
-    return f"custom: gateway {gw.id}"
-
-
-def set_custom_outcome(db: Session, gw: Gateway, body: ProfileIn | None) -> None:
-    """Creates, replaces or removes the gateway's own profile."""
-    owned = db.scalar(select(OutcomeProfile).where(OutcomeProfile.owner_gateway_id == gw.id))
-    if body is None:
-        if owned is not None:
-            if gw.outcome_profile_id == owned.id:
-                gw.outcome_profile_id = None
-            db.flush()
-            db.delete(owned)
-        return
-    body = body.model_copy(update={"name": custom_profile_name(gw)})
-    if owned is None:
-        owned = OutcomeProfile(owner_gateway_id=gw.id)
-        apply_profile(db, owned, body)  # fill it before add, so autoflush never sees it half-built
-        db.add(owned)
-    else:
-        apply_profile(db, owned, body)
-    db.flush()
-    gw.outcome_profile_id = owned.id
+def check_rule(db: Session, rule_id: int | None) -> None:
+    if rule_id is not None and db.get(DLRRule, rule_id) is None:
+        raise HTTPException(status_code=422, detail=f"DLR rule {rule_id} does not exist.")
 
 
 def snapshot(gw: Gateway) -> dict:
@@ -100,7 +64,8 @@ def snapshot(gw: Gateway) -> dict:
 
 
 def to_out(gw: Gateway, d: Defaults, db: Session, runtime: dict | None, warnings=()) -> GatewayOut:
-    custom = db.scalar(select(OutcomeProfile.id).where(OutcomeProfile.owner_gateway_id == gw.id))
+    eff = resolve.effective(gw, d)
+    rule = db.get(DLRRule, eff["dlr_rule_id"])
     return GatewayOut(
         id=gw.id,
         name=gw.name,
@@ -113,8 +78,8 @@ def to_out(gw: Gateway, d: Defaults, db: Session, runtime: dict | None, warnings
         notes=gw.notes,
         version=gw.version,
         settings=Settings(**resolve.raw_settings(gw)),
-        effective=resolve.effective(gw, d),
-        custom_outcome=custom is not None,
+        effective=eff,
+        dlr_rule_name=rule.name if rule else "",
         runtime=runtime,
         warnings=list(warnings),
         created_at=gw.created_at,
@@ -192,13 +157,9 @@ def create_gateway(
     stores: StoresDep,
     cipher: CipherDep,
 ):
-    if body.custom_outcome is not None and body.outcome_profile_id is not None:
-        raise HTTPException(
-            status_code=422, detail="Give outcome_profile_id or custom_outcome, not both."
-        )
     worker = pick_worker(db, body.worker_id)
     name_conflict(db, body.name)
-    check_profile_choice(db, body.outcome_profile_id, None)
+    check_rule(db, body.dlr_rule_id)
     raw = body.model_dump(include=set(SETTING_COLUMNS))
     check_effective(resolve.effective(raw, resolve.defaults(db)))
 
@@ -222,8 +183,6 @@ def create_gateway(
         except IntegrityError as exc:
             db.rollback()
             raise ports.conflict(db, worker, body.port, None) from exc
-        if body.custom_outcome is not None:
-            set_custom_outcome(db, gw, body.custom_outcome)
         changes = sync.Changes()
         changes.bump(db, {worker.id}, gw.id, "create")
         audit.record(
@@ -251,13 +210,10 @@ def update_gateway(
     stores: StoresDep,
     cipher: CipherDep,
 ):
-    """Partial update. A setting sent as null goes back to following the default."""
+    """Partial update. A setting sent as null goes back to following the default.
+    The port or worker can only change while the gateway is stopped (disabled)."""
     gw = get_gateway(db, gateway_id)
     fields = body.model_fields_set
-    if "custom_outcome" in fields and body.custom_outcome is not None and body.outcome_profile_id:
-        raise HTTPException(
-            status_code=422, detail="Give outcome_profile_id or custom_outcome, not both."
-        )
     for required in ("name", "port", "system_id", "password", "status"):
         if required in fields and getattr(body, required) is None:
             raise HTTPException(status_code=422, detail=f"{required} cannot be null.")
@@ -269,11 +225,16 @@ def update_gateway(
         worker = pick_worker(db, body.worker_id)
     port = body.port if "port" in fields else gw.port
     moved = worker.id != gw.worker_id or port != gw.port
+    if moved and gw.status == "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Stop the gateway (set it to disabled) before changing its port or worker.",
+        )
 
     if "name" in fields:
         name_conflict(db, body.name, gw.id)
-    if "outcome_profile_id" in fields:
-        check_profile_choice(db, body.outcome_profile_id, gw.id)
+    if "dlr_rule_id" in fields:
+        check_rule(db, body.dlr_rule_id)
     for f in SIMPLE_FIELDS:
         if f in fields:
             setattr(gw, f, getattr(body, f))
@@ -282,8 +243,6 @@ def update_gateway(
     for c in SETTING_COLUMNS:
         if c in fields:
             setattr(gw, c, getattr(body, c))
-    if "custom_outcome" in fields:
-        set_custom_outcome(db, gw, body.custom_outcome)
     check_effective(resolve.effective(gw, resolve.defaults(db)))
     gw.version += 1
 
@@ -304,10 +263,6 @@ def update_gateway(
         details = audit.diff(before, snapshot(gw))
         if "password" in fields:
             details["password"] = ["*****", "*****"]
-        if "custom_outcome" in fields:
-            details["custom_outcome"] = (
-                body.custom_outcome.model_dump() if body.custom_outcome else None
-            )
         audit.record(db, request, admin.username, "gateway.update", "gateway", gw.id, details)
         commit_or_conflict(db, worker, port, gw.id)
     changes.publish(stores)
@@ -321,9 +276,6 @@ def delete_gateway(gateway_id: int, request: Request, db: DB, admin: Admin, stor
     changes = sync.Changes()
     changes.bump(db, {gw.worker_id}, gw.id, "delete")
     audit.record(db, request, admin.username, "gateway.delete", "gateway", gw.id, snapshot(gw))
-    gw.outcome_profile_id = None
-    db.flush()
-    db.execute(delete(OutcomeProfile).where(OutcomeProfile.owner_gateway_id == gw.id))
     db.delete(gw)
     db.commit()
     changes.publish(stores)
@@ -339,12 +291,11 @@ def reveal_password(gateway_id: int, request: Request, db: DB, admin: Admin, cip
     return {"password": cipher.decrypt(gw.password_enc)}
 
 
-@router.get("/gateways/{gateway_id}/profile")
-def gateway_profile(gateway_id: int, db: DB, admin: Admin):
-    """The outcome profile this gateway effectively uses."""
+@router.get("/gateways/{gateway_id}/dlr-rule", response_model=RuleOut)
+def gateway_rule(gateway_id: int, db: DB, admin: Admin):
+    """The DLR rule this gateway effectively uses."""
     gw = get_gateway(db, gateway_id)
-    pid = resolve.effective(gw, resolve.defaults(db))["outcome_profile_id"]
-    return ProfileOut.model_validate(db.get(OutcomeProfile, pid))
+    return db.get(DLRRule, resolve.effective(gw, resolve.defaults(db))["dlr_rule_id"])
 
 
 @router.get("/ports/check")

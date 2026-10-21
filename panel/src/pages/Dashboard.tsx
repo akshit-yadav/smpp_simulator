@@ -2,14 +2,17 @@ import { Link, useNavigate } from "react-router-dom";
 import { useGateways, useWorkers } from "../api/queries";
 import { LineChart, Sparkline } from "../components/charts";
 import { RuntimeBadge } from "../components/GatewayBadges";
-import { Badge, Card, Empty, ErrorBox, Loading, PageHead } from "../components/ui";
+import { Badge, Card, Empty, ErrorBox, Loading, PageHead, Term } from "../components/ui";
+import type { GlossaryKey } from "../lib/glossary";
 import { fmtNum, fmtRate } from "../lib/format";
 import { useLiveRates } from "../lib/live";
 
-function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Tile({ label, info, value, sub }: { label: string; info: GlossaryKey; value: string; sub?: string }) {
   return (
     <div className="tile">
-      <div className="tile-label">{label}</div>
+      <div className="tile-label">
+        <Term info={info}>{label}</Term>
+      </div>
       <div className="tile-value">{value}</div>
       {sub && <div className="tile-sub">{sub}</div>}
     </div>
@@ -53,10 +56,10 @@ export default function Dashboard() {
         )}
 
         <div className="grid grid-4">
-          <Tile label="Accepted submit_sm" value={`${fmtRate(t?.accepted)}/s`} sub={`${fmtRate(t?.throttled)}/s throttled · ${fmtRate(t?.rejected)}/s rejected`} />
-          <Tile label="DLRs sent" value={`${fmtRate(t?.dlr)}/s`} sub={`${fmtNum(backlog.pending)} scheduled · ${fmtNum(backlog.queued)} queued (no receiver)`} />
-          <Tile label="Bound sessions" value={fmtNum(t?.sessions ?? 0)} sub="across all gateways" />
-          <Tile label="Gateways listening" value={`${listening} / ${gws.length}`} sub={`${online} of ${ws.length} workers online`} />
+          <Tile label="Accepted submit_sm" info="accepted" value={`${fmtRate(t?.accepted)}/s`} sub={`${fmtRate(t?.throttled)}/s throttled · ${fmtRate(t?.rejected)}/s rejected`} />
+          <Tile label="DLRs sent" info="dlrsSent" value={`${fmtRate(t?.dlr)}/s`} sub={`${fmtNum(backlog.pending)} scheduled · ${fmtNum(backlog.queued)} queued (no receiver)`} />
+          <Tile label="Bound sessions" info="sessions" value={fmtNum(t?.sessions ?? 0)} sub="across all gateways" />
+          <Tile label="Gateways listening" info="listening" value={`${listening} / ${gws.length}`} sub={`${online} of ${ws.length} workers online`} />
         </div>
 
         <div className="grid grid-2">
@@ -101,7 +104,9 @@ export default function Dashboard() {
                     <th>State</th>
                     <th className="num">Sessions</th>
                     <th className="num">Accepted/s</th>
-                    <th className="num">Throttled/s</th>
+                    <th className="num">
+                      <Term info="throttled">Throttled/s</Term>
+                    </th>
                     <th className="num">DLRs/s</th>
                     <th>Last 5 min</th>
                   </tr>
@@ -148,8 +153,12 @@ export default function Dashboard() {
                     <th>IP</th>
                     <th>State</th>
                     <th className="num">Gateways</th>
-                    <th className="num">DLRs scheduled</th>
-                    <th className="num">DLRs queued</th>
+                    <th className="num">
+                      <Term info="dlrScheduled">DLRs scheduled</Term>
+                    </th>
+                    <th className="num">
+                      <Term info="dlrQueued">DLRs queued</Term>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

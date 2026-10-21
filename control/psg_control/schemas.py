@@ -79,7 +79,7 @@ class Settings(Strict):
     dlr_include_text: bool | None = None
     dlr_include_tlvs: bool | None = None
     response_latency_ms: int | None = Field(default=None, ge=0, le=60_000)
-    outcome_profile_id: int | None = None
+    dlr_rule_id: int | None = None
 
     @field_validator("bind_types")
     @classmethod
@@ -104,7 +104,7 @@ class DefaultsIn(Strict):
     dlr_include_text: bool
     dlr_include_tlvs: bool
     response_latency_ms: int = Field(ge=0, le=60_000)
-    outcome_profile_id: int
+    dlr_rule_id: int
 
     @model_validator(mode="after")
     def check_range(self):
@@ -118,38 +118,28 @@ class DefaultsOut(DefaultsIn):
     updated_at: datetime | None = None
 
 
-# ---- outcome profiles ---------------------------------------------------------------
+# ---- DLR rules ---------------------------------------------------------------------
 
 
 class EntryIn(Strict):
     name: str = Field(default="", max_length=64)
     command_status: int = Field(default=0, ge=0, le=0xFFFFFFFF)
     dlr_status: DlrStatus | None = None
-    dlr_error: str | None = Field(default=None, min_length=1, max_length=3)
+    dlr_error: str | None = Field(default=None, pattern=r"^\d{3}$")
     weight_bp: int = Field(default=0, ge=0, le=10_000)
-    dlr_delay_min_ms: Ms | None = None
-    dlr_delay_max_ms: Ms | None = None
 
     @model_validator(mode="after")
     def check(self):
         if self.command_status == 0:
             if self.dlr_status is None:
-                raise ValueError(
-                    "dlr_status is required for an accepted outcome (command_status 0)"
-                )
+                raise ValueError("dlr_status is required for an accepted entry (command_status 0)")
             self.dlr_error = self.dlr_error or "000"
         else:  # rejected: no message ID, no DLR
             self.dlr_status = self.dlr_error = None
-            self.dlr_delay_min_ms = self.dlr_delay_max_ms = None
-        lo, hi = self.dlr_delay_min_ms, self.dlr_delay_max_ms
-        if (lo is None) != (hi is None):
-            raise ValueError("set both dlr_delay_min_ms and dlr_delay_max_ms, or neither")
-        if lo is not None and lo > hi:
-            raise ValueError("dlr_delay_min_ms must be <= dlr_delay_max_ms")
         return self
 
 
-class ProfileIn(Strict):
+class RuleIn(Strict):
     name: str = Field(min_length=1, max_length=128)
     description: str = Field(default="", max_length=255)
     mode: Literal["fixed", "random", "weighted"]
@@ -158,7 +148,11 @@ class ProfileIn(Strict):
     entries: list[EntryIn] = Field(min_length=1, max_length=50)
 
     @model_validator(mode="after")
-    def check_weights(self):
+    def check_mode(self):
+        if self.mode == "fixed":
+            if len(self.entries) != 1:
+                raise ValueError("a fixed rule uses exactly one entry; remove the others")
+            self.seed = None  # nothing random to seed
         if self.mode == "weighted":
             total = sum(e.weight_bp for e in self.entries)
             if total != 10_000:
@@ -170,7 +164,7 @@ class EntryOut(EntryIn):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
-class ProfileOut(BaseModel):
+class RuleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
@@ -178,15 +172,14 @@ class ProfileOut(BaseModel):
     mode: str
     distribution: str
     seed: int | None
-    owner_gateway_id: int | None
     entries: list[EntryOut]
     created_at: datetime
     updated_at: datetime
 
 
 class PreviewIn(Strict):
-    profile: ProfileIn | None = None
-    profile_id: int | None = None
+    rule: RuleIn | None = None
+    rule_id: int | None = None
     messages: int = Field(default=10_000, ge=1, le=1_000_000)
 
 
@@ -219,7 +212,6 @@ class GatewayCreate(GatewayBase):
     password: str
     status: Literal["active", "disabled"] = "active"
     notes: str = Field(default="", max_length=2000)
-    custom_outcome: ProfileIn | None = None
 
 
 class GatewayUpdate(GatewayBase):
@@ -230,7 +222,6 @@ class GatewayUpdate(GatewayBase):
     password: str | None = None
     status: Literal["active", "disabled"] | None = None
     notes: str | None = Field(default=None, max_length=2000)
-    custom_outcome: ProfileIn | None = None
 
 
 class GatewayOut(BaseModel):
@@ -247,7 +238,7 @@ class GatewayOut(BaseModel):
     version: int
     settings: Settings
     effective: dict
-    custom_outcome: bool
+    dlr_rule_name: str
     runtime: dict | None
     warnings: list[str] = []
     created_at: datetime
@@ -283,12 +274,17 @@ class CommandStatusOut(BaseModel):
 
 
 class DlrErrorIn(Strict):
-    code: str = Field(pattern=r"^[A-Za-z0-9]{1,3}$")
+    code: str = Field(pattern=r"^\d{1,3}$", description="Numeric, stored as 3 digits (7 -> 007)")
     label: str = Field(min_length=1, max_length=128)
     suggested_status: DlrStatus = "UNDELIV"
     network_error_type: int | None = Field(default=None, ge=0, le=255)
     network_error_code: int | None = Field(default=None, ge=0, le=65535)
     dlr_text: str | None = Field(default=None, max_length=64)
+
+    @field_validator("code")
+    @classmethod
+    def three_digits(cls, v: str) -> str:
+        return v.zfill(3)
 
     @model_validator(mode="after")
     def both_or_neither(self):

@@ -1,14 +1,13 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useGateways, useProfiles } from "../api/queries";
+import { useGateways } from "../api/queries";
 import { RuntimeBadge } from "../components/GatewayBadges";
-import { Card, Empty, ErrorBox, Loading, PageHead } from "../components/ui";
+import { Card, Empty, ErrorBox, Loading, PageHead, Term } from "../components/ui";
 import { fmtNum, fmtRate } from "../lib/format";
 import { useLiveRates } from "../lib/live";
 
 export default function Gateways() {
   const q = useGateways(5000);
-  const profiles = useProfiles();
   const { latest } = useLiveRates();
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
@@ -23,13 +22,11 @@ export default function Gateways() {
     );
   }, [q.data, search, status]);
 
-  const profileName = (id: number) => profiles.data?.find((p) => p.id === id)?.name;
-
   return (
     <>
       <PageHead
-        title="Gateways"
-        sub="Each gateway is a real SMPP 3.4 listener with its own port, credentials and behaviour."
+        title="Gateway Manager"
+        sub="Each gateway is a real SMPP 3.4 listener with its own port, credentials and DLR rule."
         actions={
           <Link className="btn primary" to="/gateways/new">
             New gateway
@@ -66,12 +63,18 @@ export default function Gateways() {
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>System ID</th>
+                  <th>
+                    <Term info="systemId">System ID</Term>
+                  </th>
                   <th>Address</th>
                   <th>Worker</th>
                   <th>State</th>
-                  <th>Outcomes</th>
-                  <th className="num">TPS limit</th>
+                  <th>
+                    <Term info="dlrRule">DLR Rule</Term>
+                  </th>
+                  <th className="num">
+                    <Term info="tpsLimit">TPS limit</Term>
+                  </th>
                   <th className="num">Sessions</th>
                   <th className="num">Accepted/s</th>
                 </tr>
@@ -95,7 +98,7 @@ export default function Gateways() {
                       <td>
                         <RuntimeBadge gw={g} />
                       </td>
-                      <td>{g.custom_outcome ? <span className="muted">Custom</span> : (profileName(g.effective.outcome_profile_id) ?? "—")}</td>
+                      <td>{g.dlr_rule_name}</td>
                       <td className="num">{tps ? `${fmtNum(tps)} / ${g.effective.tps_scope}` : "Unlimited"}</td>
                       <td className="num">{fmtNum(r?.sessions ?? 0)}</td>
                       <td className="num">{fmtRate(r?.accepted ?? 0)}</td>

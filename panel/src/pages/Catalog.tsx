@@ -2,7 +2,7 @@ import { useState } from "react";
 import { catalogApi, keys, useCatalogMutation, useCommandStatuses, useDlrErrors } from "../api/queries";
 import type { CommandStatus, DlrError, DlrStatus } from "../api/types";
 import { useToast } from "../components/toast";
-import { Badge, Card, ConfirmButton, ErrorBox, Field, Loading, Modal, PageHead, Tabs } from "../components/ui";
+import { Badge, Card, ConfirmButton, ErrorBox, Field, Loading, Modal, PageHead, Tabs, Term } from "../components/ui";
 
 type Tab = "errors" | "statuses" | "dlr";
 
@@ -56,7 +56,7 @@ function StatusForm({ initial, onClose }: { initial?: CommandStatus; onClose: ()
       }
     >
       <div className="stack">
-        <Field label="Code (hex)" hint="Vendor codes only: 0x400 – 0x4FF." error={!inRange ? "Must be between 400 and 4FF." : undefined}>
+        <Field label="Code (hex)" info="commandStatus" hint="Vendor codes only: 0x400 – 0x4FF." error={!inRange ? "Must be between 400 and 4FF." : undefined}>
           {(id) => (
             <div className="row" style={{ flexWrap: "nowrap", gap: 6 }}>
               <span className="mono">0x</span>
@@ -86,7 +86,7 @@ function ErrorForm({ initial, onClose }: { initial?: DlrError; onClose: () => vo
   const toast = useToast();
   const m = useCatalogMutation(initial ? catalogApi.updateError : catalogApi.createError, keys.dlrErrors);
   const tlv = f.network_error_type !== null;
-  const valid = /^[A-Za-z0-9]{1,3}$/.test(f.code) && f.label.trim() && (!tlv || f.network_error_code !== null);
+  const valid = /^\d{1,3}$/.test(f.code) && f.label.trim() && (!tlv || f.network_error_code !== null);
   return (
     <Modal
       title={initial ? `Edit ${initial.code}` : "Add custom DLR error"}
@@ -115,10 +115,22 @@ function ErrorForm({ initial, onClose }: { initial?: DlrError; onClose: () => vo
       }
     >
       <div className="form-grid">
-        <Field label="Code" hint="Up to 3 letters or digits; appears as err:XXX.">
-          {(id) => <input id={id} className="input mono" value={f.code} disabled={!!initial} maxLength={3} onChange={(e) => setF({ ...f, code: e.target.value.replace(/[^A-Za-z0-9]/g, "") })} />}
+        <Field label="Code" info="errCode" hint="Digits only; stored as 3 digits (7 → 007). Appears as err:XXX.">
+          {(id) => (
+            <input
+              id={id}
+              className="input mono"
+              inputMode="numeric"
+              value={f.code}
+              disabled={!!initial}
+              maxLength={3}
+              placeholder="901"
+              onChange={(e) => setF({ ...f, code: e.target.value.replace(/\D/g, "") })}
+              onBlur={() => f.code && setF({ ...f, code: f.code.padStart(3, "0") })}
+            />
+          )}
         </Field>
-        <Field label="Suggested DLR status">
+        <Field label="Suggested DLR status" info="suggestedStatus">
           {(id) => (
             <select id={id} className="input" value={f.suggested_status} onChange={(e) => setF({ ...f, suggested_status: e.target.value as DlrStatus })}>
               {DLR_STATES.map(([s]) => (
@@ -130,7 +142,7 @@ function ErrorForm({ initial, onClose }: { initial?: DlrError; onClose: () => vo
         <Field label="Label" className="span-2">
           {(id) => <input id={id} className="input" value={f.label} maxLength={128} onChange={(e) => setF({ ...f, label: e.target.value })} placeholder="Template Mismatch" />}
         </Field>
-        <Field label="DLR text (optional)" hint="Replaces text: in the DLR." className="span-2">
+        <Field label="DLR text (optional)" info="dlrText" hint="Replaces text: in the DLR." className="span-2">
           {(id) => <input id={id} className="input" value={f.dlr_text ?? ""} maxLength={64} onChange={(e) => setF({ ...f, dlr_text: e.target.value || null })} />}
         </Field>
         <div className="span-2">
@@ -145,7 +157,7 @@ function ErrorForm({ initial, onClose }: { initial?: DlrError; onClose: () => vo
         </div>
         {tlv && (
           <>
-            <Field label="Network type" hint="3 = GSM">
+            <Field label="Network type" info="networkError" hint="3 = GSM">
               {(id) => <input id={id} className="input" type="number" min={0} max={255} value={f.network_error_type ?? 3} onChange={(e) => setF({ ...f, network_error_type: Number(e.target.value) })} />}
             </Field>
             <Field label="Error code">
@@ -172,7 +184,7 @@ export default function Catalog() {
 
   return (
     <>
-      <PageHead title="Error catalog" sub="Codes used by outcome profiles. System codes are read-only; you can add your own." />
+      <PageHead title="Error catalog" sub="Codes used by DLR rules. System codes are read-only; you can add your own." />
       <Tabs
         value={tab}
         onChange={setTab}
@@ -199,11 +211,19 @@ export default function Catalog() {
               <table>
                 <thead>
                   <tr>
-                    <th>Code</th>
+                    <th>
+                      <Term info="errCode">Code</Term>
+                    </th>
                     <th>Label</th>
-                    <th>Suggested status</th>
-                    <th>network_error_code</th>
-                    <th>DLR text</th>
+                    <th>
+                      <Term info="suggestedStatus">Suggested status</Term>
+                    </th>
+                    <th>
+                      <Term info="networkError">network_error_code</Term>
+                    </th>
+                    <th>
+                      <Term info="dlrText">DLR text</Term>
+                    </th>
                     <th />
                   </tr>
                 </thead>
@@ -223,7 +243,7 @@ export default function Catalog() {
                             <button type="button" className="btn sm" onClick={() => setEditError(e)}>
                               Edit
                             </button>
-                            <ConfirmButton small danger label="Delete" title={`Delete ${e.code}?`} message="Codes used by an outcome profile cannot be deleted." onConfirm={() => delError.mutateAsync(e.code)} />
+                            <ConfirmButton small danger label="Delete" title={`Delete ${e.code}?`} message="Codes used by a DLR rule cannot be deleted." onConfirm={() => delError.mutateAsync(e.code)} />
                           </span>
                         )}
                       </td>
@@ -238,7 +258,7 @@ export default function Catalog() {
 
       {tab === "statuses" && (
         <Card
-          title="SMPP command_status"
+          title={<Term info="commandStatus">SMPP command_status</Term>}
           actions={
             <button type="button" className="btn primary sm" onClick={() => setEditStatus("new")}>
               Add vendor code
@@ -272,7 +292,7 @@ export default function Catalog() {
                             <button type="button" className="btn sm" onClick={() => setEditStatus(s)}>
                               Edit
                             </button>
-                            <ConfirmButton small danger label="Delete" title={`Delete ${s.hex}?`} message="Codes used by an outcome profile cannot be deleted." onConfirm={() => delStatus.mutateAsync(s.code)} />
+                            <ConfirmButton small danger label="Delete" title={`Delete ${s.hex}?`} message="Codes used by a DLR rule cannot be deleted." onConfirm={() => delStatus.mutateAsync(s.code)} />
                           </span>
                         )}
                       </td>
@@ -292,7 +312,9 @@ export default function Catalog() {
               <thead>
                 <tr>
                   <th>stat:</th>
-                  <th className="num">message_state TLV</th>
+                  <th className="num">
+                    <Term info="messageState">message_state TLV</Term>
+                  </th>
                   <th>Meaning</th>
                 </tr>
               </thead>

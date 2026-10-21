@@ -1,26 +1,28 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { revealPassword, useAudit, useDefaults, useDeleteGateway, useGateway, useGatewayProfile, useKillSession, useSaveGateway, useSessions } from "../api/queries";
+import { revealPassword, useAudit, useDefaults, useDeleteGateway, useGateway, useGatewayRule, useKillSession, useSaveGateway, useSessions } from "../api/queries";
 import type { Defaults, Gateway, SettingKey } from "../api/types";
 import { LineChart } from "../components/charts";
 import { RuntimeBadge } from "../components/GatewayBadges";
 import { useToast } from "../components/toast";
-import { Badge, Card, ConfirmButton, Empty, ErrorBox, Loading, PageHead, errorMessage } from "../components/ui";
+import { Badge, Card, ConfirmButton, Empty, ErrorBox, Loading, PageHead, Term, errorMessage } from "../components/ui";
 import { fmtAgo, fmtDuration, fmtMs, fmtNum, fmtRate, fmtTime, hex } from "../lib/format";
+import type { GlossaryKey } from "../lib/glossary";
 import { useLiveRates } from "../lib/live";
 
-const SETTING_LABELS: [SettingKey, string, (d: Defaults) => string][] = [
-  ["tps_limit", "TPS limit", (d) => (d.tps_limit ? `${fmtNum(d.tps_limit)}/s per ${d.tps_scope}` : "Unlimited")],
-  ["max_binds", "Max binds", (d) => (d.max_binds ? String(d.max_binds) : "Unlimited")],
-  ["bind_types", "Bind types", (d) => d.bind_types.map((b) => b.toUpperCase()).join(", ")],
-  ["dlr_enabled", "DLRs", (d) => (d.dlr_enabled ? "On" : "Off")],
+const SETTING_LABELS: [SettingKey, string, GlossaryKey, (d: Defaults) => string][] = [
+  ["tps_limit", "TPS limit", "tpsLimit", (d) => (d.tps_limit ? `${fmtNum(d.tps_limit)}/s per ${d.tps_scope}` : "Unlimited")],
+  ["max_binds", "Max binds", "maxBinds", (d) => (d.max_binds ? String(d.max_binds) : "Unlimited")],
+  ["bind_types", "Bind types", "bindTypes", (d) => d.bind_types.map((b) => b.toUpperCase()).join(", ")],
+  ["dlr_enabled", "DLRs", "dlrEnabled", (d) => (d.dlr_enabled ? "On" : "Off")],
   [
     "dlr_timing",
     "DLR timing",
+    "dlrTiming",
     (d) => (d.dlr_timing === "immediate" ? "Immediate" : d.dlr_timing === "fixed" ? `After ${fmtMs(d.dlr_delay_ms)}` : `${fmtMs(d.dlr_min_ms)} – ${fmtMs(d.dlr_max_ms)}`),
   ],
-  ["dlr_id_format", "DLR id: format", (d) => d.dlr_id_format],
-  ["dlr_include_tlvs", "DLR TLVs", (d) => (d.dlr_include_tlvs ? "Included" : "Off")],
+  ["dlr_id_format", "DLR id: format", "dlrIdFormat", (d) => d.dlr_id_format],
+  ["dlr_include_tlvs", "DLR TLVs", "dlrIncludeTlvs", (d) => (d.dlr_include_tlvs ? "Included" : "Off")],
 ];
 
 const isCustom = (g: Gateway, k: SettingKey) => {
@@ -74,7 +76,9 @@ function Sessions({ gw }: { gw: Gateway }) {
                 <th>Bind</th>
                 <th>Bound for</th>
                 <th className="num">submit_sm</th>
-                <th className="num">DLRs in flight</th>
+                <th className="num">
+                  <Term info="dlrsInFlight">DLRs in flight</Term>
+                </th>
                 <th />
               </tr>
             </thead>
@@ -162,7 +166,7 @@ function History({ id }: { id: number }) {
 export default function GatewayDetail() {
   const id = Number(useParams().id);
   const q = useGateway(id);
-  const profile = useGatewayProfile(id);
+  const rule = useGatewayRule(id);
   const defaults = useDefaults();
   const save = useSaveGateway(id);
   const remove = useDeleteGateway();
@@ -269,11 +273,17 @@ export default function GatewayDetail() {
         <div className="grid grid-2">
           <Card title="Connection">
             <dl className="kv">
-              <dt>Host</dt>
+              <dt>
+                <Term info="ip">Host</Term>
+              </dt>
               <dd className="mono">{g.ip}</dd>
-              <dt>Port</dt>
+              <dt>
+                <Term info="port">Port</Term>
+              </dt>
               <dd className="mono">{g.port}</dd>
-              <dt>System ID</dt>
+              <dt>
+                <Term info="systemId">System ID</Term>
+              </dt>
               <dd className="mono">{g.system_id}</dd>
               <dt>Password</dt>
               <dd>
@@ -287,68 +297,73 @@ export default function GatewayDetail() {
                   <dd style={{ whiteSpace: "pre-wrap" }}>{g.notes}</dd>
                 </>
               )}
-              <dt>Config version</dt>
+              <dt>
+                <Term info="configVersion">Config version</Term>
+              </dt>
               <dd>{g.version}</dd>
             </dl>
           </Card>
           <Card title="Settings">
             <dl className="kv">
-              {SETTING_LABELS.map(([k, label, show]) => (
+              {SETTING_LABELS.map(([k, label, info, show]) => (
                 <div key={k} style={{ display: "contents" }}>
-                  <dt>{label}</dt>
+                  <dt>
+                    <Term info={info}>{label}</Term>
+                  </dt>
                   <dd>
                     {show(g.effective)} {!isCustom(g, k) && <span className="default-chip">· default</span>}
                   </dd>
                 </div>
               ))}
             </dl>
-            {defaults.data && <p className="small muted" style={{ marginBottom: 0 }}>“default” values follow the Defaults page.</p>}
+            {defaults.data && <p className="small muted" style={{ marginBottom: 0 }}>“default” values follow Gateway Defaults.</p>}
           </Card>
         </div>
 
         <Card
           title={
             <>
-              Outcomes{" "}
+              <Term info="dlrRule">DLR Rule</Term>{" "}
               <span className="muted small" style={{ fontWeight: 400 }}>
-                {g.custom_outcome ? "custom for this gateway" : profile.data ? `profile “${profile.data.name}”` : ""}
+                {g.dlr_rule_name}
+                {g.settings.dlr_rule_id === null && " (from Gateway Defaults)"}
               </span>
             </>
           }
           actions={
-            !g.custom_outcome && profile.data ? (
-              <Link className="btn sm" to={`/profiles/${profile.data.id}`}>
-                Open profile
+            rule.data ? (
+              <Link className="btn sm" to={`/dlr-rules/${rule.data.id}`}>
+                Open rule
               </Link>
             ) : undefined
           }
         >
-          {profile.data ? (
+          {rule.data ? (
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Outcome</th>
+                    <th>Entry</th>
                     <th>Response</th>
                     <th>DLR</th>
-                    {profile.data.mode === "weighted" && <th className="num">Share</th>}
+                    {rule.data.mode === "weighted" && <th className="num">Share</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {profile.data.entries.map((e, i) => (
+                  {rule.data.entries.map((e, i) => (
                     <tr key={i}>
-                      <td>{e.name || `Outcome ${i + 1}`}</td>
+                      <td>{e.name || `Entry ${i + 1}`}</td>
                       <td>{e.command_status === 0 ? "Accept" : `Reject ${hex(e.command_status)}`}</td>
                       <td className="mono">{e.command_status === 0 ? `stat:${e.dlr_status} err:${e.dlr_error}` : "—"}</td>
-                      {profile.data.mode === "weighted" && <td className="num">{(e.weight_bp / 100).toFixed(2)}%</td>}
+                      {rule.data.mode === "weighted" && <td className="num">{(e.weight_bp / 100).toFixed(2)}%</td>}
                     </tr>
                   ))}
                 </tbody>
               </table>
               <p className="small muted" style={{ marginBottom: 0 }}>
-                Mode: {profile.data.mode}
-                {profile.data.mode !== "fixed" && `, ${profile.data.distribution}`}
-                {profile.data.seed !== null && `, seed ${profile.data.seed}`}
+                Mode: {rule.data.mode}
+                {rule.data.mode !== "fixed" && `, ${rule.data.distribution}`}
+                {rule.data.seed !== null && `, seed ${rule.data.seed}`}
               </p>
             </div>
           ) : (
@@ -358,7 +373,7 @@ export default function GatewayDetail() {
 
         <Card title="Live overrides">
           <Empty title="Arrives in milestone M6">
-            <p>Force an outcome, reject binds, drop sessions, black-hole or close the gateway, with optional auto-revert.</p>
+            <p>Force a result, reject binds, drop sessions, black-hole or close the gateway, with optional auto-revert.</p>
           </Empty>
         </Card>
 

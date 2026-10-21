@@ -108,8 +108,10 @@ class DLRError(Base):
     system: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-class OutcomeProfile(Base):
-    __tablename__ = "outcome_profile"
+class DLRRule(Base):
+    """A named, reusable mix of results for accepted and rejected messages."""
+
+    __tablename__ = "dlr_rule"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     name: Mapped[str] = mapped_column(String(128), unique=True)
@@ -117,38 +119,32 @@ class OutcomeProfile(Base):
     mode: Mapped[str] = mapped_column(String(16))  # fixed | random | weighted
     distribution: Mapped[str] = mapped_column(String(16), default="probabilistic")
     seed: Mapped[int | None] = mapped_column(BigInteger)
-    # Set for a gateway's own (custom) profile; NULL for shared profiles.
-    owner_gateway_id: Mapped[int | None] = mapped_column(
-        ForeignKey("gateway.id", ondelete="CASCADE", use_alter=True)
-    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
-    entries: Mapped[list["OutcomeEntry"]] = relationship(
-        back_populates="profile",
+    entries: Mapped[list["DLRRuleEntry"]] = relationship(
+        back_populates="rule",
         cascade="all, delete-orphan",
-        order_by="OutcomeEntry.position",
+        order_by="DLRRuleEntry.position",
         lazy="selectin",
     )
 
 
-class OutcomeEntry(Base):
-    __tablename__ = "outcome_entry"
+class DLRRuleEntry(Base):
+    __tablename__ = "dlr_rule_entry"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    profile_id: Mapped[int] = mapped_column(ForeignKey("outcome_profile.id", ondelete="CASCADE"))
+    rule_id: Mapped[int] = mapped_column(ForeignKey("dlr_rule.id", ondelete="CASCADE"))
     position: Mapped[int] = mapped_column(Integer)
     name: Mapped[str] = mapped_column(String(64), default="")
     command_status: Mapped[int] = mapped_column(ForeignKey("command_status.code"), default=0)
     dlr_status: Mapped[str | None] = mapped_column(String(8))
     dlr_error: Mapped[str | None] = mapped_column(ForeignKey("dlr_error.code"))
     weight_bp: Mapped[int] = mapped_column(Integer, default=0)
-    dlr_delay_min_ms: Mapped[int | None] = mapped_column(Integer)
-    dlr_delay_max_ms: Mapped[int | None] = mapped_column(Integer)
 
-    profile: Mapped[OutcomeProfile] = relationship(back_populates="entries")
+    rule: Mapped[DLRRule] = relationship(back_populates="entries")
 
 
 # Gateway settings that follow the global default when NULL.
@@ -167,7 +163,7 @@ SETTING_COLUMNS = (
     "dlr_include_text",
     "dlr_include_tlvs",
     "response_latency_ms",
-    "outcome_profile_id",
+    "dlr_rule_id",
 )
 
 
@@ -191,7 +187,7 @@ class Defaults(Base):
     dlr_include_text: Mapped[bool] = mapped_column(Boolean, default=True)
     dlr_include_tlvs: Mapped[bool] = mapped_column(Boolean, default=True)
     response_latency_ms: Mapped[int] = mapped_column(Integer, default=0)
-    outcome_profile_id: Mapped[int] = mapped_column(ForeignKey("outcome_profile.id"))
+    dlr_rule_id: Mapped[int] = mapped_column(ForeignKey("dlr_rule.id"))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
@@ -230,8 +226,6 @@ class Gateway(Base):
     dlr_include_text: Mapped[bool | None] = mapped_column(Boolean)
     dlr_include_tlvs: Mapped[bool | None] = mapped_column(Boolean)
     response_latency_ms: Mapped[int | None] = mapped_column(Integer)
-    outcome_profile_id: Mapped[int | None] = mapped_column(
-        ForeignKey("outcome_profile.id", ondelete="SET NULL")
-    )
+    dlr_rule_id: Mapped[int | None] = mapped_column(ForeignKey("dlr_rule.id", ondelete="SET NULL"))
 
     worker: Mapped[Worker] = relationship(lazy="joined")

@@ -1,5 +1,60 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "../api/client";
+import { GLOSSARY, type GlossaryKey } from "../lib/glossary";
+
+/** An (i) icon that explains a term on hover, focus or tap. */
+export function InfoTip({ term, label }: { term: GlossaryKey; label?: string }) {
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const id = useId();
+  const show = () => {
+    const r = btn.current?.getBoundingClientRect();
+    if (!r) return;
+    const width = Math.min(300, window.innerWidth - 24);
+    setPos({ left: Math.max(12, Math.min(r.left + r.width / 2 - width / 2, window.innerWidth - width - 12)), top: r.bottom + 6 });
+  };
+  useEffect(() => {
+    if (!pos) return;
+    const hide = () => setPos(null);
+    window.addEventListener("scroll", hide, true);
+    return () => window.removeEventListener("scroll", hide, true);
+  }, [pos]);
+  return (
+    <span className="info" onMouseEnter={show} onMouseLeave={() => setPos(null)}>
+      <button
+        ref={btn}
+        type="button"
+        className="info-btn"
+        aria-label={`What is ${label ?? "this"}?`}
+        aria-describedby={pos ? id : undefined}
+        onFocus={show}
+        onBlur={() => setPos(null)}
+        onClick={(e) => {
+          e.preventDefault();
+          if (pos) setPos(null);
+          else show();
+        }}
+      >
+        i
+      </button>
+      {pos && (
+        <span role="tooltip" id={id} className="info-pop" style={{ left: pos.left, top: pos.top }}>
+          {GLOSSARY[term]}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** A label with an optional (i) explanation. */
+export function Term({ children, info }: { children: ReactNode; info?: GlossaryKey }) {
+  return (
+    <span className="term">
+      {children}
+      {info && <InfoTip term={info} label={typeof children === "string" ? children : undefined} />}
+    </span>
+  );
+}
 
 type Tone = "good" | "warning" | "critical" | "neutral";
 
@@ -35,12 +90,14 @@ export function PageHead({ title, sub, actions }: { title: ReactNode; sub?: Reac
 
 export function Field({
   label,
+  info,
   hint,
   error,
   className,
   children,
 }: {
   label: ReactNode;
+  info?: GlossaryKey;
   hint?: ReactNode;
   error?: ReactNode;
   className?: string;
@@ -49,7 +106,10 @@ export function Field({
   const id = useId();
   return (
     <div className={`field ${className ?? ""}`}>
-      <label htmlFor={id}>{label}</label>
+      <span className="term">
+        <label htmlFor={id}>{label}</label>
+        {info && <InfoTip term={info} label={typeof label === "string" ? label : undefined} />}
+      </span>
       {children(id)}
       {error ? <div className="field-error">{error}</div> : hint ? <div className="field-hint">{hint}</div> : null}
     </div>

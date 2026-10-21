@@ -8,8 +8,8 @@ from psg_control.models import (
     SETTING_COLUMNS,
     Defaults,
     DLRError,
+    DLRRule,
     Gateway,
-    OutcomeProfile,
     Worker,
 )
 from psg_control.security import Cipher
@@ -29,9 +29,10 @@ def effective(gw: Gateway | dict, d: Defaults) -> dict:
     return {c: raw.get(c) if raw.get(c) is not None else getattr(d, c) for c in SETTING_COLUMNS}
 
 
-def outcome_config(profile: OutcomeProfile, errors: dict[str, DLRError]) -> dict:
+def outcome_config(rule: DLRRule, errors: dict[str, DLRError]) -> dict:
+    """A DLR rule in the worker's outcome-profile shape."""
     outcomes = []
-    for e in profile.entries:
+    for e in rule.entries:
         o = {"name": e.name, "command_status": e.command_status, "weight_bp": e.weight_bp}
         if e.command_status == 0:
             err = errors.get(e.dlr_error or "000")
@@ -44,17 +45,15 @@ def outcome_config(profile: OutcomeProfile, errors: dict[str, DLRError]) -> dict
                 }
             if err is not None and err.dlr_text:
                 o["dlr_text"] = err.dlr_text
-            if e.dlr_delay_min_ms is not None:
-                o["dlr_delay"] = {"min_ms": e.dlr_delay_min_ms, "max_ms": e.dlr_delay_max_ms}
         outcomes.append(o)
     out = {
-        "name": profile.name,
-        "mode": profile.mode,
-        "distribution": profile.distribution,
+        "name": rule.name,
+        "mode": rule.mode,
+        "distribution": rule.distribution,
         "outcomes": outcomes,
     }
-    if profile.seed is not None:
-        out["seed"] = profile.seed
+    if rule.seed is not None:
+        out["seed"] = rule.seed
     return out
 
 
@@ -90,14 +89,14 @@ def worker_config(db: Session, cipher: Cipher, worker: Worker) -> dict:
     """Everything a worker needs to run its gateways, with passwords decrypted."""
     d = defaults(db)
     errors = {e.code: e for e in db.scalars(select(DLRError))}
-    profiles: dict[int, dict] = {}
+    rules: dict[int, dict] = {}
     gateways = []
     for gw in db.scalars(
         select(Gateway).where(Gateway.worker_id == worker.id).order_by(Gateway.id)
     ):
         eff = effective(gw, d)
-        pid = eff["outcome_profile_id"]
-        if pid not in profiles:
-            profiles[pid] = outcome_config(db.get(OutcomeProfile, pid), errors)
-        gateways.append(gateway_config(gw, eff, profiles[pid], cipher))
+        rid = eff["dlr_rule_id"]
+        if rid not in rules:
+            rules[rid] = outcome_config(db.get(DLRRule, rid), errors)
+        gateways.append(gateway_config(gw, eff, rules[rid], cipher))
     return {"worker_id": worker.id, "version": worker.config_version, "gateways": gateways}

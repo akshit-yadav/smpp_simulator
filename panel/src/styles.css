@@ -835,3 +835,118 @@ dl.kv dd {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* (i) explanations */
+.term {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.field > .term > label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.info {
+  display: inline-flex;
+}
+.info-btn {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-3);
+  font: italic 600 10px/1 Georgia, "Times New Roman", serif;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  cursor: help;
+  flex: none;
+}
+.info-btn:hover,
+.info-btn:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.info-pop {
+  position: fixed;
+  z-index: 70;
+  width: min(300px, calc(100vw - 24px));
+  background: var(--text);
+  color: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: normal;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
+  white-space: normal;
+}
+
+/* footer */
+.footer {
+  margin-top: 40px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-3);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* DLR timing: the delay inputs live inside the timing block, so switching
+   timing never moves the fields around it. */
+.timing-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  background: var(--surface-2);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px 16px;
+  align-items: start;
+}
+.timing-block .delays {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  min-height: 58px;
+}
+.timing-block .delays .field {
+  flex: 1;
+}
+@media (max-width: 700px) {
+  .timing-block {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* "Set default" bar on gateway settings tabs */
+.defaults-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  margin-bottom: 16px;
+}
+.custom-mark {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+}
+.note {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}

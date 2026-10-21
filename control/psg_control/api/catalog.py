@@ -4,7 +4,7 @@ from sqlalchemy import select
 from psg_control import audit
 from psg_control.api.deps import DB, Admin, StoresDep
 from psg_control.catalog import DLR_STATUSES
-from psg_control.models import CommandStatus, DLRError, OutcomeEntry
+from psg_control.models import CommandStatus, DLRError, DLRRuleEntry
 from psg_control.schemas import (
     CommandStatusIn,
     CommandStatusOut,
@@ -80,8 +80,8 @@ def update_command_status(
 @router.delete("/command-statuses/{code}", status_code=204)
 def delete_command_status(code: int, request: Request, db: DB, admin: Admin):
     row = _vendor(db, code)
-    if db.scalar(select(OutcomeEntry.id).where(OutcomeEntry.command_status == code).limit(1)):
-        raise HTTPException(status_code=409, detail="Code is used by an outcome profile.")
+    if db.scalar(select(DLRRuleEntry.id).where(DLRRuleEntry.command_status == code).limit(1)):
+        raise HTTPException(status_code=409, detail="Code is used by a DLR rule.")
     audit.record(
         db,
         request,
@@ -112,7 +112,7 @@ def list_dlr_errors(db: DB, admin: Admin):
 
 
 def _custom(db, code: str) -> DLRError:
-    row = db.get(DLRError, code)
+    row = db.get(DLRError, code.zfill(3))
     if row is None:
         raise HTTPException(status_code=404, detail="DLR error not found.")
     if row.system:
@@ -172,8 +172,8 @@ def update_dlr_error(
 @router.delete("/dlr-errors/{code}", status_code=204)
 def delete_dlr_error(code: str, request: Request, db: DB, admin: Admin):
     row = _custom(db, code)
-    if db.scalar(select(OutcomeEntry.id).where(OutcomeEntry.dlr_error == code).limit(1)):
-        raise HTTPException(status_code=409, detail="DLR error is used by an outcome profile.")
+    if db.scalar(select(DLRRuleEntry.id).where(DLRRuleEntry.dlr_error == code).limit(1)):
+        raise HTTPException(status_code=409, detail="DLR error is used by a DLR rule.")
     audit.record(
         db,
         request,

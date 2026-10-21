@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useDeleteWorker, useUpdateWorker, useWorkers } from "../api/queries";
 import type { Worker } from "../api/types";
 import { useToast } from "../components/toast";
-import { Badge, Card, ConfirmButton, Empty, ErrorBox, Field, Loading, Modal, PageHead, errorMessage } from "../components/ui";
+import { Badge, Card, ConfirmButton, Empty, ErrorBox, Field, Loading, Modal, PageHead, Term, errorMessage } from "../components/ui";
 import { fmtAgo, fmtTime } from "../lib/format";
 
 function Rename({ worker, onClose }: { worker: Worker; onClose: () => void }) {
@@ -55,7 +55,9 @@ export default function Workers() {
                   <th className="num">ID</th>
                   <th>Name</th>
                   <th>IP</th>
-                  <th>State</th>
+                  <th>
+                    <Term info="workerDrain">State</Term>
+                  </th>
                   <th>Port range</th>
                   <th className="num">Gateways</th>
                   <th>Version</th>

@@ -1,13 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useDefaults, useProfiles, useSaveDefaults } from "../api/queries";
+import { useDefaults, useRules, useSaveDefaults } from "../api/queries";
 import type { Defaults, Settings, SettingKey } from "../api/types";
 import { DlrFields, LimitFields } from "../components/SettingsForm";
 import { useToast } from "../components/toast";
 import { Card, ErrorBox, Field, Loading, PageHead } from "../components/ui";
 
-export default function DefaultsPage() {
+export default function GatewayDefaults() {
   const q = useDefaults();
-  const profiles = useProfiles();
+  const rules = useRules();
   const save = useSaveDefaults();
   const toast = useToast();
   const [form, setForm] = useState<Defaults | null>(null);
@@ -26,7 +26,7 @@ export default function DefaultsPage() {
     save.mutate(body as Defaults, {
       onSuccess: (d) => {
         setForm(d);
-        toast("Defaults saved; gateways that follow them update within a second");
+        toast("Gateway Defaults saved; gateways that follow them update within a second");
       },
     });
   };
@@ -34,8 +34,8 @@ export default function DefaultsPage() {
   return (
     <form onSubmit={submit}>
       <PageHead
-        title="Defaults"
-        sub="Every gateway setting left on “Default” follows these values."
+        title="Gateway Defaults"
+        sub="Gateways follow these settings unless a setting is changed on the gateway itself."
         actions={
           <button className="btn primary" disabled={save.isPending || invalid}>
             {save.isPending ? "Saving…" : "Save defaults"}
@@ -44,25 +44,24 @@ export default function DefaultsPage() {
       />
       <div className="stack">
         <ErrorBox error={save.error} />
-        {invalid && <div className="alert warning">Minimum DLR delay is above the maximum.</div>}
-        <Card title="Outcomes">
-          <Field label="Default outcome profile">
+        <Card title="DLR Rule">
+          <Field label="Default DLR Rule" info="dlrRule">
             {(id) => (
-              <select id={id} className="input" style={{ maxWidth: 360 }} value={form.outcome_profile_id} onChange={(e) => set("outcome_profile_id", Number(e.target.value))}>
-                {profiles.data?.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
+              <select id={id} className="input" style={{ maxWidth: 360 }} value={form.dlr_rule_id} onChange={(e) => set("dlr_rule_id", Number(e.target.value))}>
+                {rules.data?.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} ({r.mode})
                   </option>
                 ))}
               </select>
             )}
           </Field>
         </Card>
-        <Card title="Delivery receipts">
-          <DlrFields values={form} defaults={form} inherit={false} onChange={set} />
+        <Card title="DLR Settings">
+          <DlrFields values={form} defaults={form} showCustom={false} onChange={set} />
         </Card>
         <Card title="Limits">
-          <LimitFields values={form} defaults={form} inherit={false} onChange={set} />
+          <LimitFields values={form} defaults={form} showCustom={false} onChange={set} />
         </Card>
       </div>
     </form>

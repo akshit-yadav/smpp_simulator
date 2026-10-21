@@ -23,10 +23,10 @@ def test_dlr_error_catalog(admin):
     url = "/api/v1/catalog/dlr-errors"
     errors = {e["code"]: e for e in admin.get(url).json()}
     assert errors["000"]["system"] and errors["001"]["network_error_code"] == 1
-    assert not errors["T01"]["system"]
+    assert not errors["901"]["system"] and errors["901"]["label"] == "Template Mismatch"
 
     body = {
-        "code": "Z99",
+        "code": "77",
         "label": "Spam filter",
         "suggested_status": "REJECTD",
         "network_error_type": 3,
@@ -34,17 +34,19 @@ def test_dlr_error_catalog(admin):
         "dlr_text": "Blocked",
     }
     assert admin.post(url, json=body).status_code == 201
-    assert admin.post(url, json=body | {"code": "TOOLONG"}).status_code == 422
+    assert "077" in {e["code"] for e in admin.get(url).json()}  # numeric, padded to 3 digits
+    for bad in ("T02", "1234", "7a", ""):
+        assert admin.post(url, json=body | {"code": bad}).status_code == 422, bad
     assert (
         admin.post(url, json=body | {"code": "Z98", "network_error_code": None}).status_code == 422
     )
     assert admin.patch(f"{url}/001", json={"label": "x"}).status_code == 409
-    assert admin.delete(f"{url}/Z99").status_code == 204
+    assert admin.delete(f"{url}/077").status_code == 204
     statuses = admin.get("/api/v1/catalog/dlr-statuses").json()
     assert {"status": "DELIVRD", "message_state": 2} in statuses
 
 
-def profile(**over):
+def rule(**over):
     body = {
         "name": "mix",
         "mode": "weighted",
@@ -57,29 +59,33 @@ def profile(**over):
     return body | over
 
 
-def test_profile_crud_and_validation(admin):
-    url = "/api/v1/profiles"
-    bad = profile(entries=[{"dlr_status": "DELIVRD", "weight_bp": 5000}])
+def test_rule_crud_and_validation(admin):
+    url = "/api/v1/dlr-rules"
+    bad = rule(entries=[{"dlr_status": "DELIVRD", "weight_bp": 5000}])
     r = admin.post(url, json=bad)
     assert r.status_code == 422 and "100%" in r.text
-    assert admin.post(url, json=profile(entries=[{"command_status": 0}])).status_code == 422
+    assert admin.post(url, json=rule(entries=[{"command_status": 0}])).status_code == 422
     r = admin.post(
         url,
-        json=profile(entries=[{"dlr_status": "DELIVRD", "dlr_error": "QQQ", "weight_bp": 10000}]),
+        json=rule(entries=[{"dlr_status": "DELIVRD", "dlr_error": "999", "weight_bp": 10000}]),
     )
-    assert r.status_code == 422 and "QQQ" in r.json()["detail"]
+    assert r.status_code == 422 and "999" in r.json()["detail"]
 
-    p = admin.post(url, json=profile()).json()
+    p = admin.post(url, json=rule()).json()
     assert [e["name"] for e in p["entries"]] == ["ok", "fail", "throttle"]
     assert p["entries"][2]["dlr_status"] is None  # rejected outcomes carry no DLR fields
-    assert admin.post(url, json=profile()).status_code == 409
+    assert admin.post(url, json=rule()).status_code == 409
 
-    updated = admin.put(f"{url}/{p['id']}", json=profile(name="mix2", mode="fixed")).json()
-    assert updated["name"] == "mix2" and updated["mode"] == "fixed"
+    # Fixed mode uses exactly one entry, and has nothing to seed.
+    r = admin.put(f"{url}/{p['id']}", json=rule(name="mix2", mode="fixed"))
+    assert r.status_code == 422 and "exactly one entry" in r.text
+    one = rule(name="mix2", mode="fixed", seed=5, entries=[{"dlr_status": "DELIVRD"}])
+    updated = admin.put(f"{url}/{p['id']}", json=one).json()
+    assert updated["mode"] == "fixed" and len(updated["entries"]) == 1 and updated["seed"] is None
 
 
-def test_profile_in_use_cannot_be_deleted(admin, worker):
-    p = admin.post("/api/v1/profiles", json=profile()).json()
+def test_rule_in_use_cannot_be_deleted(admin, worker):
+    p = admin.post("/api/v1/dlr-rules", json=rule()).json()
     gw = admin.post(
         "/api/v1/gateways",
         json={
@@ -87,41 +93,41 @@ def test_profile_in_use_cannot_be_deleted(admin, worker):
             "port": 20001,
             "system_id": "g",
             "password": "p",
-            "outcome_profile_id": p["id"],
+            "dlr_rule_id": p["id"],
         },
     ).json()
-    r = admin.delete(f"/api/v1/profiles/{p['id']}")
+    r = admin.delete(f"/api/v1/dlr-rules/{p['id']}")
     assert r.status_code == 409 and "g" in r.json()["detail"]
-    assert admin.delete("/api/v1/profiles/1").status_code == 409  # the default profile
+    assert admin.delete("/api/v1/dlr-rules/1").status_code == 409  # used by Gateway Defaults
 
-    # Editing a shared profile reaches the worker.
-    admin.put(f"/api/v1/profiles/{p['id']}", json=profile(mode="random"))
+    # Editing a rule reaches the worker.
+    admin.put(f"/api/v1/dlr-rules/{p['id']}", json=rule(mode="random"))
     cfg = admin.get(
         "/internal/v1/workers/1/config", headers={"Authorization": f"Bearer {INTERNAL_TOKEN}"}
     ).json()
     assert cfg["gateways"][0]["outcome"]["mode"] == "random"
     admin.delete(f"/api/v1/gateways/{gw['id']}")
-    assert admin.delete(f"/api/v1/profiles/{p['id']}").status_code == 204
+    assert admin.delete(f"/api/v1/dlr-rules/{p['id']}").status_code == 204
 
 
 def test_preview(admin):
     exact = admin.post(
-        "/api/v1/profiles/preview", json={"profile": profile(distribution="exact")}
+        "/api/v1/dlr-rules/preview", json={"rule": rule(distribution="exact")}
     ).json()
     assert [e["count"] for e in exact["entries"]] == [7000, 2500, 500]
     assert exact["accepted"] == 9500 and exact["dlr_status"] == {"DELIVRD": 7000, "UNDELIV": 2500}
 
     prob = admin.post(
-        "/api/v1/profiles/preview", json={"profile": profile(seed=7), "messages": 100000}
+        "/api/v1/dlr-rules/preview", json={"rule": rule(seed=7), "messages": 100000}
     ).json()
     for e in prob["entries"]:
         assert abs(e["actual_pct"] - e["configured_pct"]) < 0.5
     again = admin.post(
-        "/api/v1/profiles/preview", json={"profile": profile(seed=7), "messages": 100000}
+        "/api/v1/dlr-rules/preview", json={"rule": rule(seed=7), "messages": 100000}
     ).json()
     assert again == prob  # the seed makes it repeatable
 
-    seeded = admin.post("/api/v1/profiles/preview", json={"profile_id": 2}).json()
+    seeded = admin.post("/api/v1/dlr-rules/preview", json={"rule_id": 2}).json()
     assert seeded["messages"] == 10000
 
 

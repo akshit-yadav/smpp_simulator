@@ -175,7 +175,7 @@ function AuditCard() {
       <div className="row" style={{ marginBottom: 12 }}>
         <select className="input" style={{ maxWidth: 200 }} value={entity} onChange={(e) => { setEntity(e.target.value); setPages([]); }} aria-label="Entity type">
           <option value="">All entities</option>
-          {["gateway", "profile", "command_status", "dlr_error", "defaults", "worker", "admin"].map((x) => (
+          {["gateway", "dlr_rule", "command_status", "dlr_error", "defaults", "worker", "admin"].map((x) => (
             <option key={x}>{x}</option>
           ))}
         </select>

@@ -10,10 +10,10 @@ import type {
   Gateway,
   Live,
   Me,
+  DlrRule,
+  DlrRuleInput,
   PortCheck,
   Preview,
-  Profile,
-  ProfileInput,
   Session,
   Worker,
 } from "./types";
@@ -23,8 +23,8 @@ export const keys = {
   gateways: ["gateways"] as const,
   gateway: (id: number) => ["gateways", id] as const,
   sessions: (id: number) => ["sessions", id] as const,
-  profiles: ["profiles"] as const,
-  profile: (id: number) => ["profiles", id] as const,
+  rules: ["dlr-rules"] as const,
+  rule: (id: number) => ["dlr-rules", id] as const,
   workers: ["workers"] as const,
   defaults: ["defaults"] as const,
   commandStatuses: ["catalog", "command-statuses"] as const,
@@ -75,7 +75,7 @@ export function useSaveGateway(id?: number) {
       qc.invalidateQueries({ queryKey: keys.gateways });
       qc.invalidateQueries({ queryKey: keys.workers });
       qc.setQueryData(keys.gateway(gw.id), gw);
-      qc.invalidateQueries({ queryKey: ["gateway-profile", gw.id] });
+      qc.invalidateQueries({ queryKey: ["gateway-rule", gw.id] });
     },
   });
 }
@@ -93,8 +93,8 @@ export function useDeleteGateway() {
 
 export const revealPassword = (id: number) => post<{ password: string }>(`/gateways/${id}/reveal-password`);
 
-export const useGatewayProfile = (id: number) =>
-  useQuery({ queryKey: ["gateway-profile", id], queryFn: () => get<Profile>(`/gateways/${id}/profile`), enabled: id > 0 });
+export const useGatewayRule = (id: number) =>
+  useQuery({ queryKey: ["gateway-rule", id], queryFn: () => get<DlrRule>(`/gateways/${id}/dlr-rule`), enabled: id > 0 });
 
 export const useSessions = (id: number) =>
   useQuery({ queryKey: keys.sessions(id), queryFn: () => get<Session[]>(`/gateways/${id}/sessions`), refetchInterval: 2000 });
@@ -113,32 +113,31 @@ export const checkPort = (workerId: number, port: number, gatewayId?: number) =>
 export const nextFreePort = (workerId: number, start?: number) =>
   get<{ port: number | null; used: number }>(`/workers/${workerId}/ports/next-free${qs({ start })}`);
 
-// ---- profiles ------------------------------------------------------------------------
+// ---- DLR rules ------------------------------------------------------------------------
 
-export const useProfiles = () =>
-  useQuery({ queryKey: keys.profiles, queryFn: () => get<Profile[]>("/profiles") });
+export const useRules = () => useQuery({ queryKey: keys.rules, queryFn: () => get<DlrRule[]>("/dlr-rules") });
 
-export const useProfile = (id: number) =>
-  useQuery({ queryKey: keys.profile(id), queryFn: () => get<Profile>(`/profiles/${id}`), enabled: id > 0 });
+export const useRule = (id: number) =>
+  useQuery({ queryKey: keys.rule(id), queryFn: () => get<DlrRule>(`/dlr-rules/${id}`), enabled: id > 0 });
 
-export function useSaveProfile(id?: number) {
+export function useSaveRule(id?: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: ProfileInput) => (id ? put<Profile>(`/profiles/${id}`, body) : post<Profile>("/profiles", body)),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.profiles }),
+    mutationFn: (body: DlrRuleInput) => (id ? put<DlrRule>(`/dlr-rules/${id}`, body) : post<DlrRule>("/dlr-rules", body)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.rules }),
   });
 }
 
-export function useDeleteProfile() {
+export function useDeleteRule() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => del(`/profiles/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.profiles }),
+    mutationFn: (id: number) => del(`/dlr-rules/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.rules }),
   });
 }
 
-export const previewProfile = (profile: ProfileInput, messages = 10_000) =>
-  post<Preview>("/profiles/preview", { profile, messages });
+export const previewRule = (rule: DlrRuleInput, messages = 10_000) =>
+  post<Preview>("/dlr-rules/preview", { rule, messages });
 
 // ---- catalogs, defaults, workers, audit ------------------------------------------------
 

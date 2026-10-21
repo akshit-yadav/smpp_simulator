@@ -3,7 +3,7 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { useLogin, useMe } from "../api/queries";
 import { ErrorBox, Field } from "../components/ui";
-import { Brand } from "../layout/AppShell";
+import { Brand, Footer } from "../layout/AppShell";
 
 export default function Login() {
   const me = useMe();
@@ -91,6 +91,7 @@ export default function Login() {
             Back
           </button>
         )}
+        <Footer />
       </form>
     </div>
   );

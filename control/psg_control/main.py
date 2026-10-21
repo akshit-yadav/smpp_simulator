@@ -16,11 +16,11 @@ from psg_control.api import (
     auth,
     catalog,
     defaults,
+    dlr_rules,
     gateways,
     health,
     internal,
     live,
-    profiles,
     workers,
 )
 from psg_control.auth import bootstrap_admin
@@ -78,7 +78,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
     app.state.cipher = cipher
 
     app.include_router(health.router)
-    for module in (auth, workers, gateways, live, profiles, catalog, defaults, audit_log):
+    for module in (auth, workers, gateways, live, dlr_rules, catalog, defaults, audit_log):
         app.include_router(module.router, prefix="/api/v1")
     app.include_router(internal.router)
 

@@ -8,13 +8,13 @@ import AppShell from "./layout/AppShell";
 import Catalog from "./pages/Catalog";
 import ComingSoon from "./pages/ComingSoon";
 import Dashboard from "./pages/Dashboard";
-import DefaultsPage from "./pages/Defaults";
+import DlrRuleEdit from "./pages/DlrRuleEdit";
+import DlrRules from "./pages/DlrRules";
+import GatewayDefaults from "./pages/GatewayDefaults";
 import GatewayDetail from "./pages/GatewayDetail";
 import GatewayEditor from "./pages/GatewayEditor";
 import Gateways from "./pages/Gateways";
 import Login from "./pages/Login";
-import ProfileEdit from "./pages/ProfileEdit";
-import Profiles from "./pages/Profiles";
 import SettingsPage from "./pages/Settings";
 import Workers from "./pages/Workers";
 
@@ -53,20 +53,20 @@ export default function App() {
         <Route path="gateways/new" element={<GatewayEditor />} />
         <Route path="gateways/:id" element={<GatewayDetail />} />
         <Route path="gateways/:id/edit" element={<GatewayEditor />} />
-        <Route path="profiles" element={<Profiles />} />
-        <Route path="profiles/new" element={<ProfileEdit />} />
-        <Route path="profiles/:id" element={<ProfileEdit />} />
+        <Route path="dlr-rules" element={<DlrRules />} />
+        <Route path="dlr-rules/new" element={<DlrRuleEdit />} />
+        <Route path="dlr-rules/:id" element={<DlrRuleEdit />} />
         <Route path="catalog" element={<Catalog />} />
-        <Route path="defaults" element={<DefaultsPage />} />
+        <Route path="gateway-defaults" element={<GatewayDefaults />} />
         <Route path="workers" element={<Workers />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route
           path="reports"
-          element={<ComingSoon title="Reports" milestone="M4" what="Traffic by gateway, outcome mix (actual vs configured), DLR delay distribution, throttling, MO traffic, bind history and CSV export, from ClickHouse." />}
+          element={<ComingSoon title="Reports" milestone="M4" what="Traffic by gateway, DLR rule mix (actual vs configured), DLR delay distribution, throttling, MO traffic, bind history and CSV export, from ClickHouse." />}
         />
         <Route
           path="search"
-          element={<ComingSoon title="Message search" milestone="M4" what="Find a message by message ID or destination and see its submit, outcome and DLR events." />}
+          element={<ComingSoon title="Message search" milestone="M4" what="Find a message by message ID or destination and see its submit, result and DLR events." />}
         />
         <Route
           path="licence"

@@ -31,7 +31,7 @@ def test_everything_needs_login(client):
     for path in (
         "/api/v1/gateways",
         "/api/v1/workers",
-        "/api/v1/profiles",
+        "/api/v1/dlr-rules",
         "/api/v1/audit",
         "/api/v1/defaults",
         "/api/v1/catalog/dlr-errors",

@@ -3,24 +3,23 @@ from sqlalchemy import select
 
 from psg_control import audit, resolve
 from psg_control.api.deps import DB, Admin, StoresDep
-from psg_control.models import Defaults, Gateway, OutcomeProfile
+from psg_control.models import Defaults, DLRRule, Gateway
 from psg_control.schemas import DefaultsIn, DefaultsOut
 from psg_control.sync import Changes
 
-router = APIRouter(prefix="/defaults", tags=["defaults"])
+router = APIRouter(prefix="/defaults", tags=["gateway defaults"])
 
 
 @router.get("", response_model=DefaultsOut)
 def get_defaults(db: DB, admin: Admin):
-    """Global defaults. Every gateway setting left null follows these."""
+    """Gateway Defaults. Every gateway setting left null follows these."""
     return db.get(Defaults, 1)
 
 
 @router.put("", response_model=DefaultsOut)
 def put_defaults(body: DefaultsIn, request: Request, db: DB, admin: Admin, stores: StoresDep):
-    profile = db.get(OutcomeProfile, body.outcome_profile_id)
-    if profile is None or profile.owner_gateway_id is not None:
-        raise HTTPException(status_code=422, detail="outcome_profile_id must be a shared profile.")
+    if db.get(DLRRule, body.dlr_rule_id) is None:
+        raise HTTPException(status_code=422, detail="dlr_rule_id does not exist.")
     row = db.get(Defaults, 1)
     before = DefaultsIn.model_validate(
         DefaultsOut.model_validate(row).model_dump(exclude={"updated_at"})

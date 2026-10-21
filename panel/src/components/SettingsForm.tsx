@@ -1,11 +1,12 @@
-// Gateway settings (DLR and limits). In "inherit" mode every field can follow
-// the global default (sent as null) or hold a custom value; the defaults page
-// uses the same fields without the inherit switch.
+// Gateway settings (DLR and limits), shared by the gateway editor and the
+// Gateway Defaults page. On a gateway, a field shows its own value or, if it
+// has none (null), the default; editing it makes it custom. The tab's
+// "Set default" button clears every field back to following the defaults.
 
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import type { BindType, Defaults, Settings, SettingKey } from "../api/types";
-import { fmtMs } from "../lib/format";
-import { Check } from "./ui";
+import type { GlossaryKey } from "../lib/glossary";
+import { Check, InfoTip } from "./ui";
 
 type Values = { [K in SettingKey]?: Settings[K] };
 type OnChange = <K extends SettingKey>(key: K, value: Settings[K]) => void;
@@ -13,127 +14,131 @@ type OnChange = <K extends SettingKey>(key: K, value: Settings[K]) => void;
 interface Props {
   values: Values;
   defaults: Defaults;
-  inherit: boolean;
+  /** Gateway editor: mark fields that differ from the defaults. */
+  showCustom: boolean;
   onChange: OnChange;
 }
 
+export const DLR_KEYS: SettingKey[] = [
+  "dlr_enabled", "dlr_timing", "dlr_delay_ms", "dlr_min_ms", "dlr_max_ms",
+  "dlr_id_format", "dlr_date_seconds", "dlr_include_text", "dlr_include_tlvs",
+];
+export const LIMIT_KEYS: SettingKey[] = ["tps_limit", "tps_scope", "max_binds", "bind_types", "response_latency_ms"];
+
+function value<K extends SettingKey>(p: Props, k: K): NonNullable<Settings[K]> {
+  return (p.values[k] ?? p.defaults[k]) as NonNullable<Settings[K]>;
+}
+
 function Row({
-  label,
-  hint,
+  p,
   k,
-  props,
-  display,
+  label,
+  info,
+  hint,
   children,
 }: {
-  label: string;
-  hint?: ReactNode;
+  p: Props;
   k: SettingKey;
-  props: Props;
-  display: string;
-  children: (value: NonNullable<Settings[SettingKey]>) => ReactNode;
+  label: string;
+  info: GlossaryKey;
+  hint?: ReactNode;
+  children: (id: string) => ReactNode;
 }) {
-  const { values, defaults, inherit, onChange } = props;
-  const own = values[k];
-  const useDefault = inherit && (own === null || own === undefined);
-  const current = (useDefault ? defaults[k] : (own ?? defaults[k])) as NonNullable<Settings[SettingKey]>;
+  const id = useId();
+  const custom = p.showCustom && p.values[k] !== null && p.values[k] !== undefined;
   return (
     <div className="field">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <span className="field-label">{label}</span>
-        {inherit && (
-          <Check checked={useDefault} onChange={(d) => onChange(k, d ? null : (defaults[k] as never))}>
-            <span className="small muted">Default</span>
-          </Check>
-        )}
-      </div>
-      {useDefault ? (
-        <div className="input" aria-disabled style={{ display: "flex", alignItems: "center", background: "var(--surface-2)", color: "var(--text-2)" }}>
-          {display}
-        </div>
-      ) : (
-        children(current)
-      )}
+      <span className="term">
+        <label htmlFor={id}>{label}</label>
+        <InfoTip term={info} label={label} />
+        {custom && <span className="custom-mark">• custom</span>}
+      </span>
+      {children(id)}
       {hint && <div className="field-hint">{hint}</div>}
     </div>
   );
 }
 
-function num(v: string): number {
+const num = (v: string) => {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+};
+
+function YesNo({ id, value, onChange }: { id: string; value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <select id={id} className="input" value={String(value)} onChange={(e) => onChange(e.target.value === "true")}>
+      <option value="true">Yes</option>
+      <option value="false">No</option>
+    </select>
+  );
 }
 
-const bool = (b: boolean) => (b ? "Yes" : "No");
-
 export function DlrFields(p: Props) {
-  const d = p.defaults;
-  const eff = <K extends SettingKey>(k: K) => (p.values[k] ?? d[k]) as NonNullable<Settings[K]>;
-  const timing = eff("dlr_timing");
+  const timing = value(p, "dlr_timing");
+  const timingCustom = p.showCustom && ["dlr_timing", "dlr_delay_ms", "dlr_min_ms", "dlr_max_ms"].some((k) => p.values[k as SettingKey] != null);
+  const timingId = useId();
+  const minMax = value(p, "dlr_min_ms") > value(p, "dlr_max_ms");
   return (
     <div className="form-grid">
-      <Row label="Send DLRs" k="dlr_enabled" props={p} display={bool(d.dlr_enabled)}>
-        {(v) => (
-          <select className="input" value={String(v)} onChange={(e) => p.onChange("dlr_enabled", e.target.value === "true")}>
-            <option value="true">Yes</option>
-            <option value="false">No</option>
-          </select>
-        )}
+      <Row p={p} k="dlr_enabled" label="Send DLRs" info="dlrEnabled">
+        {(id) => <YesNo id={id} value={value(p, "dlr_enabled")} onChange={(v) => p.onChange("dlr_enabled", v)} />}
       </Row>
-      <Row label="Timing" k="dlr_timing" props={p} display={d.dlr_timing}>
-        {(v) => (
-          <select className="input" value={String(v)} onChange={(e) => p.onChange("dlr_timing", e.target.value as Settings["dlr_timing"])}>
+      <div />
+
+      <div className="span-2 timing-block">
+        <div className="field">
+          <span className="term">
+            <label htmlFor={timingId}>Timing</label>
+            <InfoTip term="dlrTiming" label="Timing" />
+            {timingCustom && <span className="custom-mark">• custom</span>}
+          </span>
+          <select id={timingId} className="input" value={timing} onChange={(e) => p.onChange("dlr_timing", e.target.value as Settings["dlr_timing"])}>
             <option value="immediate">Immediate</option>
             <option value="fixed">Fixed delay</option>
-            <option value="random">Random between min and max</option>
+            <option value="random">Random delay</option>
           </select>
-        )}
-      </Row>
-      {timing === "fixed" && (
-        <Row label="Delay (ms)" k="dlr_delay_ms" props={p} display={fmtMs(d.dlr_delay_ms)}>
-          {(v) => <input className="input" type="number" min={0} value={Number(v)} onChange={(e) => p.onChange("dlr_delay_ms", num(e.target.value))} />}
-        </Row>
-      )}
-      {timing === "random" && (
-        <>
-          <Row label="Minimum delay (ms)" k="dlr_min_ms" props={p} display={fmtMs(d.dlr_min_ms)}>
-            {(v) => <input className="input" type="number" min={0} value={Number(v)} onChange={(e) => p.onChange("dlr_min_ms", num(e.target.value))} />}
-          </Row>
-          <Row label="Maximum delay (ms)" k="dlr_max_ms" props={p} display={fmtMs(d.dlr_max_ms)}>
-            {(v) => <input className="input" type="number" min={0} value={Number(v)} onChange={(e) => p.onChange("dlr_max_ms", num(e.target.value))} />}
-          </Row>
-        </>
-      )}
-      <Row label="Message ID in DLR text" k="dlr_id_format" props={p} display={d.dlr_id_format}>
-        {(v) => (
-          <select className="input" value={String(v)} onChange={(e) => p.onChange("dlr_id_format", e.target.value as Settings["dlr_id_format"])}>
+        </div>
+        <div className="delays">
+          {timing === "immediate" && <span className="muted small" style={{ alignSelf: "center" }}>Sent right after the submit_sm_resp.</span>}
+          {timing === "fixed" && (
+            <div className="field">
+              <span className="field-label">Delay (ms)</span>
+              <input className="input" type="number" min={0} aria-label="Delay in milliseconds" value={value(p, "dlr_delay_ms")} onChange={(e) => p.onChange("dlr_delay_ms", num(e.target.value))} />
+            </div>
+          )}
+          {timing === "random" && (
+            <>
+              <div className="field">
+                <span className="field-label">Minimum (ms)</span>
+                <input className={`input ${minMax ? "invalid" : ""}`} type="number" min={0} aria-label="Minimum delay in milliseconds" value={value(p, "dlr_min_ms")} onChange={(e) => p.onChange("dlr_min_ms", num(e.target.value))} />
+              </div>
+              <span className="muted" style={{ paddingBottom: 8 }}>to</span>
+              <div className="field">
+                <span className="field-label">Maximum (ms)</span>
+                <input className={`input ${minMax ? "invalid" : ""}`} type="number" min={0} aria-label="Maximum delay in milliseconds" value={value(p, "dlr_max_ms")} onChange={(e) => p.onChange("dlr_max_ms", num(e.target.value))} />
+              </div>
+            </>
+          )}
+        </div>
+        {minMax && <div className="field-error span-2">The minimum delay is above the maximum.</div>}
+      </div>
+
+      <Row p={p} k="dlr_id_format" label="Message ID in DLR" info="dlrIdFormat">
+        {(id) => (
+          <select id={id} className="input" value={value(p, "dlr_id_format")} onChange={(e) => p.onChange("dlr_id_format", e.target.value as Settings["dlr_id_format"])}>
             <option value="hex">Hex (as in submit_sm_resp)</option>
             <option value="decimal">Decimal</option>
           </select>
         )}
       </Row>
-      <Row label="Dates with seconds" k="dlr_date_seconds" props={p} display={bool(d.dlr_date_seconds)} hint="YYMMDDhhmmss instead of YYMMDDhhmm">
-        {(v) => (
-          <select className="input" value={String(v)} onChange={(e) => p.onChange("dlr_date_seconds", e.target.value === "true")}>
-            <option value="false">No</option>
-            <option value="true">Yes</option>
-          </select>
-        )}
+      <Row p={p} k="dlr_date_seconds" label="Dates with seconds" info="dlrDateSeconds">
+        {(id) => <YesNo id={id} value={value(p, "dlr_date_seconds")} onChange={(v) => p.onChange("dlr_date_seconds", v)} />}
       </Row>
-      <Row label="Include text:" k="dlr_include_text" props={p} display={bool(d.dlr_include_text)}>
-        {(v) => (
-          <select className="input" value={String(v)} onChange={(e) => p.onChange("dlr_include_text", e.target.value === "true")}>
-            <option value="true">Yes</option>
-            <option value="false">No</option>
-          </select>
-        )}
+      <Row p={p} k="dlr_include_text" label="Include text:" info="dlrIncludeText">
+        {(id) => <YesNo id={id} value={value(p, "dlr_include_text")} onChange={(v) => p.onChange("dlr_include_text", v)} />}
       </Row>
-      <Row label="Include TLVs" k="dlr_include_tlvs" props={p} display={bool(d.dlr_include_tlvs)} hint="receipted_message_id, message_state, network_error_code">
-        {(v) => (
-          <select className="input" value={String(v)} onChange={(e) => p.onChange("dlr_include_tlvs", e.target.value === "true")}>
-            <option value="true">Yes</option>
-            <option value="false">No</option>
-          </select>
-        )}
+      <Row p={p} k="dlr_include_tlvs" label="Include TLVs" info="dlrIncludeTlvs">
+        {(id) => <YesNo id={id} value={value(p, "dlr_include_tlvs")} onChange={(v) => p.onChange("dlr_include_tlvs", v)} />}
       </Row>
     </div>
   );
@@ -142,53 +147,59 @@ export function DlrFields(p: Props) {
 const BIND_TYPES: BindType[] = ["tx", "rx", "trx"];
 
 export function LimitFields(p: Props) {
-  const d = p.defaults;
+  const binds = value(p, "bind_types") as BindType[];
   return (
     <div className="form-grid">
-      <Row label="TPS limit" k="tps_limit" props={p} display={d.tps_limit ? `${d.tps_limit}/s` : "Unlimited"} hint="0 = unlimited. Over the limit answers ESME_RTHROTTLED (0x58).">
-        {(v) => <input className="input" type="number" min={0} value={Number(v)} onChange={(e) => p.onChange("tps_limit", num(e.target.value))} />}
+      <Row p={p} k="tps_limit" label="TPS limit" info="tpsLimit" hint="0 = unlimited">
+        {(id) => <input id={id} className="input" type="number" min={0} value={value(p, "tps_limit")} onChange={(e) => p.onChange("tps_limit", num(e.target.value))} />}
       </Row>
-      <Row label="TPS limit applies" k="tps_scope" props={p} display={d.tps_scope === "bind" ? "Per bind" : "Per gateway"}>
-        {(v) => (
-          <select className="input" value={String(v)} onChange={(e) => p.onChange("tps_scope", e.target.value as Settings["tps_scope"])}>
-            <option value="bind">Per bind (each session gets the limit)</option>
-            <option value="gateway">Per gateway (shared by all sessions)</option>
+      <Row p={p} k="tps_scope" label="TPS limit applies" info="tpsScope">
+        {(id) => (
+          <select id={id} className="input" value={value(p, "tps_scope")} onChange={(e) => p.onChange("tps_scope", e.target.value as Settings["tps_scope"])}>
+            <option value="bind">Per bind</option>
+            <option value="gateway">Per gateway (shared)</option>
           </select>
         )}
       </Row>
-      <Row label="Max binds" k="max_binds" props={p} display={d.max_binds ? String(d.max_binds) : "Unlimited"} hint="0 = unlimited">
-        {(v) => <input className="input" type="number" min={0} value={Number(v)} onChange={(e) => p.onChange("max_binds", num(e.target.value))} />}
+      <Row p={p} k="max_binds" label="Max binds" info="maxBinds" hint="0 = unlimited">
+        {(id) => <input id={id} className="input" type="number" min={0} value={value(p, "max_binds")} onChange={(e) => p.onChange("max_binds", num(e.target.value))} />}
       </Row>
-      <Row label="Allowed bind types" k="bind_types" props={p} display={d.bind_types.map((b) => b.toUpperCase()).join(", ")}>
-        {(v) => {
-          const sel = v as BindType[];
-          return (
-            <div className="row" style={{ minHeight: 34 }}>
-              {BIND_TYPES.map((b) => (
-                <Check
-                  key={b}
-                  checked={sel.includes(b)}
-                  onChange={(on) => {
-                    const next = on ? [...sel, b] : sel.filter((x) => x !== b);
-                    if (next.length) p.onChange("bind_types", BIND_TYPES.filter((x) => next.includes(x)));
-                  }}
-                >
-                  {b.toUpperCase()}
-                </Check>
-              ))}
-            </div>
-          );
-        }}
+      <Row p={p} k="bind_types" label="Allowed bind types" info="bindTypes">
+        {() => (
+          <div className="row" style={{ minHeight: 34 }}>
+            {BIND_TYPES.map((b) => (
+              <Check
+                key={b}
+                checked={binds.includes(b)}
+                onChange={(on) => {
+                  const next = on ? [...binds, b] : binds.filter((x) => x !== b);
+                  if (next.length) p.onChange("bind_types", BIND_TYPES.filter((x) => next.includes(x)));
+                }}
+              >
+                {b.toUpperCase()}
+              </Check>
+            ))}
+          </div>
+        )}
       </Row>
-      <Row
-        label="Response latency (ms)"
-        k="response_latency_ms"
-        props={p}
-        display={fmtMs(d.response_latency_ms)}
-        hint="Stored now; the worker applies it from milestone M6."
-      >
-        {(v) => <input className="input" type="number" min={0} value={Number(v)} onChange={(e) => p.onChange("response_latency_ms", num(e.target.value))} />}
+      <Row p={p} k="response_latency_ms" label="Response latency (ms)" info="responseLatency">
+        {(id) => <input id={id} className="input" type="number" min={0} value={value(p, "response_latency_ms")} onChange={(e) => p.onChange("response_latency_ms", num(e.target.value))} />}
       </Row>
+    </div>
+  );
+}
+
+/** "Following Gateway Defaults" / "N settings are custom" + the Set default button. */
+export function DefaultsBar({ values, keys, onReset }: { values: Values; keys: SettingKey[]; onReset: () => void }) {
+  const custom = keys.filter((k) => values[k] !== null && values[k] !== undefined).length;
+  return (
+    <div className="defaults-bar">
+      <span className={custom ? "" : "muted"}>
+        {custom === 0 ? "All settings on this tab follow Gateway Defaults." : `${custom} setting${custom === 1 ? "" : "s"} on this tab differ${custom === 1 ? "s" : ""} from Gateway Defaults.`}
+      </span>
+      <button type="button" className="btn sm" disabled={custom === 0} onClick={onReset}>
+        Set default
+      </button>
     </div>
   );
 }

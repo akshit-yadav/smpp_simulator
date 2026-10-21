@@ -1,22 +1,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { checkPort, nextFreePort, useDefaults, useGateway, useGatewayProfile, useProfiles, useSaveGateway, useWorkers } from "../api/queries";
-import type { Gateway, PortCheck, ProfileInput, Settings, SettingKey } from "../api/types";
-import ProfileEditor, { newProfile, profileProblems } from "../components/ProfileEditor";
-import { DlrFields, LimitFields } from "../components/SettingsForm";
+import { checkPort, nextFreePort, useDefaults, useGateway, useRules, useSaveGateway, useWorkers } from "../api/queries";
+import type { Gateway, PortCheck, Settings, SettingKey } from "../api/types";
+import { DLR_KEYS, DefaultsBar, DlrFields, LIMIT_KEYS, LimitFields } from "../components/SettingsForm";
 import { useToast } from "../components/toast";
-import { Card, ErrorBox, Field, Loading, PageHead, Segmented, Tabs } from "../components/ui";
+import { Card, ErrorBox, Field, Loading, PageHead, Tabs } from "../components/ui";
 import { randomPassword } from "../lib/format";
 
-type Tab = "connection" | "outcomes" | "dlr" | "limits" | "mo";
-type OutcomeChoice = "default" | "shared" | "custom";
-
-const SETTING_KEYS: SettingKey[] = [
-  "max_binds", "bind_types", "tps_limit", "tps_scope", "dlr_enabled", "dlr_timing", "dlr_delay_ms",
-  "dlr_min_ms", "dlr_max_ms", "dlr_id_format", "dlr_date_seconds", "dlr_include_text",
-  "dlr_include_tlvs", "response_latency_ms",
-];
+type Tab = "connection" | "dlr" | "limits" | "mo";
 
 interface Form {
   name: string;
@@ -26,13 +18,13 @@ interface Form {
   password: string;
   status: "active" | "disabled";
   notes: string;
+  dlr_rule_id: number | null; // null = Gateway Defaults' rule
   settings: Partial<Settings>;
-  outcome: OutcomeChoice;
-  profile_id: number | null;
-  custom: ProfileInput;
 }
 
-function fromGateway(g: Gateway, custom: ProfileInput | null): Form {
+const SETTING_KEYS = [...DLR_KEYS, ...LIMIT_KEYS];
+
+function fromGateway(g: Gateway): Form {
   const settings: Partial<Settings> = {};
   for (const k of SETTING_KEYS) (settings as Record<string, unknown>)[k] = g.settings[k];
   return {
@@ -43,10 +35,8 @@ function fromGateway(g: Gateway, custom: ProfileInput | null): Form {
     password: "",
     status: g.status === "disabled" ? "disabled" : "active",
     notes: g.notes,
+    dlr_rule_id: g.settings.dlr_rule_id,
     settings,
-    outcome: g.custom_outcome ? "custom" : g.settings.outcome_profile_id ? "shared" : "default",
-    profile_id: g.custom_outcome ? null : g.settings.outcome_profile_id,
-    custom: custom ?? newProfile(),
   };
 }
 
@@ -55,10 +45,9 @@ export default function GatewayEditor() {
   const editing = id !== undefined;
   const gwId = Number(id);
   const existing = useGateway(editing ? gwId : 0);
-  const existingProfile = useGatewayProfile(editing ? gwId : 0);
   const defaults = useDefaults();
   const workers = useWorkers(0);
-  const profiles = useProfiles();
+  const rules = useRules();
   const save = useSaveGateway(editing ? gwId : undefined);
   const navigate = useNavigate();
   const toast = useToast();
@@ -69,27 +58,19 @@ export default function GatewayEditor() {
   const [portCheck, setPortCheck] = useState<PortCheck | null>(null);
   const [error, setError] = useState<unknown>(null);
 
-  // Initialise the form once its data is in.
   useEffect(() => {
     if (form) return;
     if (editing) {
-      if (existing.data && existingProfile.data) {
-        const p = existingProfile.data;
-        const custom = existing.data.custom_outcome
-          ? { name: p.name, description: p.description, mode: p.mode, distribution: p.distribution, seed: p.seed, entries: p.entries }
-          : null;
-        setForm(fromGateway(existing.data, custom));
-      }
+      if (existing.data) setForm(fromGateway(existing.data));
     } else if (workers.data) {
       const active = workers.data.filter((w) => w.status === "active");
       setForm({
         name: "", worker_id: active.length === 1 ? active[0].id : null, port: "", system_id: "",
-        password: randomPassword(), status: "active", notes: "", settings: {}, outcome: "default",
-        profile_id: null, custom: newProfile(),
+        password: randomPassword(), status: "active", notes: "", dlr_rule_id: null, settings: {},
       });
       if (active.length === 1) nextFreePort(active[0].id).then((r) => r.port && setForm((f) => (f && !f.port ? { ...f, port: String(r.port) } : f)));
     }
-  }, [editing, existing.data, existingProfile.data, workers.data, form]);
+  }, [editing, existing.data, workers.data, form]);
 
   if (!form || !defaults.data) {
     return existing.error ? <ErrorBox error={existing.error} /> : <Loading />;
@@ -97,11 +78,15 @@ export default function GatewayEditor() {
 
   const set = (patch: Partial<Form>) => setForm({ ...form, ...patch });
   const setSetting = <K extends SettingKey>(k: K, v: Settings[K]) => setForm({ ...form, settings: { ...form.settings, [k]: v } });
+  const resetTab = (keys: SettingKey[]) => setForm({ ...form, settings: { ...form.settings, ...Object.fromEntries(keys.map((k) => [k, null])) } });
   const worker = workers.data?.find((w) => w.id === form.worker_id);
   const port = Number(form.port);
+  // A running gateway keeps its address: stop it before changing port or worker.
+  const addressLocked = editing && existing.data?.status === "active";
+  const defaultRule = rules.data?.find((r) => r.id === defaults.data.dlr_rule_id);
 
   const runCheck = async (p = port) => {
-    if (!form.worker_id || !p) return;
+    if (!form.worker_id || !p || addressLocked) return;
     setPortCheck(await checkPort(form.worker_id, p, editing ? gwId : undefined).catch((e) => ({ ok: false, message: String(e) })));
   };
   const suggest = async () => {
@@ -113,32 +98,23 @@ export default function GatewayEditor() {
     }
   };
 
+  const eff = <K extends SettingKey>(k: K) => (form.settings[k] ?? defaults.data[k]) as number;
   const problems: string[] = [];
   if (!form.name.trim()) problems.push("Name is required.");
   if (!form.worker_id) problems.push("Choose a worker.");
   if (!port) problems.push("Port is required.");
   if (!form.system_id) problems.push("System ID is required.");
   if (!editing && !form.password) problems.push("Password is required.");
-  if (form.outcome === "shared" && !form.profile_id) problems.push("Choose an outcome profile.");
-  if (form.outcome === "custom") problems.push(...profileProblems(form.custom));
+  if (eff("dlr_min_ms") > eff("dlr_max_ms")) problems.push("DLR Settings: the minimum delay is above the maximum.");
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     if (problems.length) return;
-    const body: Record<string, unknown> = {
-      name: form.name.trim(), worker_id: form.worker_id, port, system_id: form.system_id,
-      status: form.status, notes: form.notes,
-    };
+    const body: Record<string, unknown> = { name: form.name.trim(), system_id: form.system_id, status: form.status, notes: form.notes, dlr_rule_id: form.dlr_rule_id };
+    if (!addressLocked) Object.assign(body, { worker_id: form.worker_id, port });
     for (const k of SETTING_KEYS) body[k] = form.settings[k] ?? null;
     if (form.password) body.password = form.password;
-    if (form.outcome === "custom") {
-      body.custom_outcome = { ...form.custom, name: form.custom.name || "custom" };
-      body.outcome_profile_id = null;
-    } else {
-      body.outcome_profile_id = form.outcome === "shared" ? form.profile_id : null;
-      if (editing && existing.data?.custom_outcome) body.custom_outcome = null;
-    }
     try {
       const gw = await save.mutateAsync(body);
       toast(editing ? `Saved ${gw.name}` : `Created ${gw.name}; listening on ${gw.ip}:${gw.port}`);
@@ -151,8 +127,6 @@ export default function GatewayEditor() {
   };
 
   const suggested = error instanceof ApiError ? error.suggestedPort : null;
-  const shared = (profiles.data ?? []).filter((p) => p.owner_gateway_id === null);
-  const defaultProfile = shared.find((p) => p.id === defaults.data.outcome_profile_id);
 
   return (
     <form onSubmit={submit}>
@@ -174,14 +148,7 @@ export default function GatewayEditor() {
         <div className="alert critical" style={{ marginBottom: 16 }}>
           {(error as Error).message}{" "}
           {suggested && (
-            <button
-              type="button"
-              className="btn sm"
-              onClick={() => {
-                set({ port: String(suggested) });
-                setError(null);
-              }}
-            >
+            <button type="button" className="btn sm" onClick={() => { set({ port: String(suggested) }); setError(null); }}>
               Use port {suggested}
             </button>
           )}
@@ -192,8 +159,7 @@ export default function GatewayEditor() {
         onChange={setTab}
         tabs={[
           { value: "connection", label: "Connection" },
-          { value: "outcomes", label: "Outcomes" },
-          { value: "dlr", label: "DLR" },
+          { value: "dlr", label: "DLR Settings" },
           { value: "limits", label: "Limits" },
           { value: "mo", label: "MO", disabled: true, title: "MO traffic arrives in milestone M7" },
         ]}
@@ -202,10 +168,10 @@ export default function GatewayEditor() {
       {tab === "connection" && (
         <Card>
           <div className="form-grid">
-            <Field label="Name" hint="Must be unique.">
+            <Field label="Name" info="gatewayName">
               {(fid) => <input id={fid} className="input" value={form.name} maxLength={128} onChange={(e) => set({ name: e.target.value })} required />}
             </Field>
-            <Field label="Status">
+            <Field label="Status" info="status">
               {(fid) => (
                 <select id={fid} className="input" value={form.status} onChange={(e) => set({ status: e.target.value as Form["status"] })}>
                   <option value="active">Active (listening)</option>
@@ -213,12 +179,18 @@ export default function GatewayEditor() {
                 </select>
               )}
             </Field>
-            <Field label="Worker" hint={workers.data?.length ? undefined : "No worker has registered yet."}>
+            {addressLocked && (
+              <div className="alert warning span-2">
+                This gateway is running, so its worker and port are locked. Stop it first (Disable on the gateway page, or set Status to Disabled and save), then change the port.
+              </div>
+            )}
+            <Field label="Worker" info="worker" hint={workers.data?.length ? undefined : "No worker has registered yet."}>
               {(fid) => (
                 <select
                   id={fid}
                   className="input"
                   value={form.worker_id ?? ""}
+                  disabled={addressLocked}
                   onChange={(e) => {
                     set({ worker_id: e.target.value ? Number(e.target.value) : null });
                     setPortCheck(null);
@@ -234,12 +206,13 @@ export default function GatewayEditor() {
                 </select>
               )}
             </Field>
-            <Field label="IP" hint="Filled in from the worker.">
+            <Field label="IP" info="ip">
               {(fid) => <input id={fid} className="input mono" value={worker?.ip ?? ""} disabled />}
             </Field>
             <Field
               label="Port"
-              hint={worker ? `Range ${worker.port_min}–${worker.port_max}${worker.port_exclude.length ? `, excluding ${worker.port_exclude.join(", ")}` : ""}` : undefined}
+              info="port"
+              hint={worker && !addressLocked ? `Range ${worker.port_min}–${worker.port_max}${worker.port_exclude.length ? `, excluding ${worker.port_exclude.join(", ")}` : ""}` : undefined}
               error={portCheck && !portCheck.ok ? portCheck.message : undefined}
             >
               {(fid) => (
@@ -252,17 +225,18 @@ export default function GatewayEditor() {
                       min={1}
                       max={65535}
                       value={form.port}
+                      disabled={addressLocked}
                       onChange={(e) => {
                         set({ port: e.target.value });
                         setPortCheck(null);
                       }}
-                      onBlur={() => !editing || port !== existing.data?.port ? runCheck() : undefined}
+                      onBlur={() => (!editing || port !== existing.data?.port ? runCheck() : undefined)}
                       required
                     />
-                    <button type="button" className="btn" onClick={() => runCheck()} disabled={!form.worker_id || !port}>
+                    <button type="button" className="btn" onClick={() => runCheck()} disabled={addressLocked || !form.worker_id || !port}>
                       Check
                     </button>
-                    <button type="button" className="btn" onClick={suggest} disabled={!form.worker_id}>
+                    <button type="button" className="btn" onClick={suggest} disabled={addressLocked || !form.worker_id}>
                       Next free
                     </button>
                   </div>
@@ -280,12 +254,22 @@ export default function GatewayEditor() {
                 </>
               )}
             </Field>
-            <Field label="System ID" hint="Up to 15 characters, no spaces.">
+            <Field label="DLR Rule" info="dlrRule" hint={<Link to="/dlr-rules">Manage DLR Rules</Link>}>
               {(fid) => (
-                <input id={fid} className="input mono" value={form.system_id} maxLength={15} onChange={(e) => set({ system_id: e.target.value.replace(/\s/g, "") })} required />
+                <select id={fid} className="input" value={form.dlr_rule_id ?? ""} onChange={(e) => set({ dlr_rule_id: e.target.value ? Number(e.target.value) : null })}>
+                  <option value="">Gateway Defaults ({defaultRule?.name ?? "…"})</option>
+                  {rules.data?.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} ({r.mode})
+                    </option>
+                  ))}
+                </select>
               )}
             </Field>
-            <Field label="Password" hint={editing ? "Leave empty to keep the current password. Up to 8 characters." : "Up to 8 characters. Stored encrypted."}>
+            <Field label="System ID" info="systemId">
+              {(fid) => <input id={fid} className="input mono" value={form.system_id} maxLength={15} onChange={(e) => set({ system_id: e.target.value.replace(/\s/g, "") })} required />}
+            </Field>
+            <Field label="Password" info="password" hint={editing ? "Leave empty to keep the current password." : undefined}>
               {(fid) => (
                 <div className="row" style={{ flexWrap: "nowrap", gap: 8 }}>
                   <input
@@ -315,55 +299,17 @@ export default function GatewayEditor() {
         </Card>
       )}
 
-      {tab === "outcomes" && (
-        <Card>
-          <div className="stack">
-            <Segmented
-              label="Outcome source"
-              value={form.outcome}
-              onChange={(outcome) => set({ outcome })}
-              options={[
-                { value: "default", label: `Default (${defaultProfile?.name ?? "—"})` },
-                { value: "shared", label: "Shared profile" },
-                { value: "custom", label: "Custom for this gateway" },
-              ]}
-            />
-            {form.outcome === "default" && (
-              <p className="muted" style={{ margin: 0 }}>
-                Follows the default profile set on the <Link to="/defaults">Defaults</Link> page.
-              </p>
-            )}
-            {form.outcome === "shared" && (
-              <Field label="Profile">
-                {(fid) => (
-                  <select id={fid} className="input" style={{ maxWidth: 360 }} value={form.profile_id ?? ""} onChange={(e) => set({ profile_id: e.target.value ? Number(e.target.value) : null })}>
-                    <option value="">Choose…</option>
-                    {shared.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name} ({p.mode})
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Field>
-            )}
-            {form.outcome === "custom" && <ProfileEditor value={form.custom} onChange={(custom) => set({ custom })} />}
-          </div>
-        </Card>
-      )}
-
       {tab === "dlr" && (
-        <Card title="Delivery receipts">
-          <p className="muted small" style={{ marginTop: -4 }}>
-            A DLR is sent only when DLRs are on, the message was accepted, and the client asked for one in registered_delivery.
-          </p>
-          <DlrFields values={form.settings} defaults={defaults.data} inherit onChange={setSetting} />
+        <Card title="DLR Settings">
+          <DefaultsBar values={form.settings} keys={DLR_KEYS} onReset={() => resetTab(DLR_KEYS)} />
+          <DlrFields values={form.settings} defaults={defaults.data} showCustom onChange={setSetting} />
         </Card>
       )}
 
       {tab === "limits" && (
         <Card title="Limits">
-          <LimitFields values={form.settings} defaults={defaults.data} inherit onChange={setSetting} />
+          <DefaultsBar values={form.settings} keys={LIMIT_KEYS} onReset={() => resetTab(LIMIT_KEYS)} />
+          <LimitFields values={form.settings} defaults={defaults.data} showCustom onChange={setSetting} />
         </Card>
       )}
 

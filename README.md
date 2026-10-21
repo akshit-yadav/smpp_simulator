@@ -2,7 +2,7 @@
 
 PSG simulates SMPP 3.4 vendor gateways so you can load-test and HA-test SMS platforms
 (sized for a 25,000 TPS benchmark). An admin creates fake gateways in a web panel. Each
-gateway is a real SMPP listener with its own port, credentials, outcome rules, DLR
+gateway is a real SMPP listener with its own port, credentials, DLR rule, DLR
 behaviour, MO traffic and TPS limit.
 
 ## Status
@@ -12,9 +12,9 @@ behaviour, MO traffic and TPS limit.
 | M0 Scaffolding: compose, CI, health, worker registry | ✅ Done |
 | M1 Worker core: SMPP 3.4 codec, bind auth, `submit_sm`, `enquire_link`, `unbind`, many listeners | ✅ Done |
 | M2 Hot path: outcome engine, TPS limits, timing-wheel DLRs, DLR delivery/queue/retry, load generator | ✅ Done (short benchmark runs, see below) |
-| M3 Control plane: admin login + TOTP, audit log, gateway/profile/catalog/defaults API, 3-layer port check, config sync, worker registry | ✅ Done. Manage gateways through the REST API (Swagger UI at `/api/docs`) |
+| M3 Control plane: admin login + TOTP, audit log, gateway/DLR rule/catalog/defaults API, 3-layer port check, config sync, worker registry | ✅ Done. Manage gateways through the REST API (Swagger UI at `/api/docs`) |
 | M4 Events and reports (ClickHouse); the panel's Reports and Message search screens | ⏳ Next |
-| M5 Panel: login + TOTP, live dashboard, gateways list/editor/detail (sessions with kill), outcome profiles with preview, error catalog, defaults, workers, settings & audit | ✅ Done |
+| M5 Panel: login + TOTP, live dashboard, Gateway Manager (list/editor/detail, sessions with kill), DLR Rules with preview, error catalog, Gateway Defaults, workers, settings & audit | ✅ Done |
 | M6–M9 `submit_multi`/`data_sm`/`query_sm`…, overrides, MO, licensing, hardening | ⏳ Not started |
 
 See [docs/build-prompt.md](docs/build-prompt.md) for the full scope.
@@ -72,11 +72,11 @@ Open http://127.0.0.1:8080/ and sign in as `admin` with the `PSG_ADMIN_PASSWORD`
 | Screen | What you can do |
 |---|---|
 | Dashboard | Live submit/throttle/reject and DLR rates (2 s refresh), sessions, listener state, worker DLR backlog |
-| Gateways | List, search, filter; create and edit (Connection / Outcomes / DLR / Limits tabs) with port check and next-free-port; every setting can follow the default or be custom |
-| Gateway detail | Live chart, bound sessions with **Kill**, password reveal, effective settings, outcome mix, change history, enable/disable/delete |
-| Outcome profiles | Shared profiles with fixed/random/weighted modes, exact or probabilistic distribution, seed, and a 10,000-message preview |
-| Error catalog | DLR `err:` codes (system + custom), SMPP command statuses (+ vendor 0x400–0x4FF), DLR statuses |
-| Defaults | Global defaults every gateway can follow |
+| Gateway Manager | List, search, filter; create and edit (Connection / DLR Settings / Limits tabs). Connection picks the DLR Rule and checks the port (next free port suggested); the port of a running gateway is locked until you stop it. DLR Settings and Limits follow Gateway Defaults until you change a field; **Set default** reverts the tab |
+| Gateway detail | Live chart, bound sessions with **Kill**, password reveal, effective settings, DLR rule entries, change history, enable/disable/delete |
+| DLR Rules | Rules with Fixed / Random / Weighted modes, exact or probabilistic distribution, seed, and a 10,000-message preview. Fixed rules have exactly one entry |
+| Error catalog | DLR `err:` codes (system + custom, strictly numeric), SMPP command statuses (+ vendor 0x400–0x4FF), DLR statuses |
+| Gateway Defaults | The default DLR Rule, DLR Settings and Limits every gateway follows |
 | Workers | Registry, rename, drain/activate, remove offline workers |
 | Settings & audit | Change password, turn on TOTP (QR code), audit log of every change |
 
@@ -98,12 +98,12 @@ curl -b jar $API/workers          # workers register themselves within ~5 s of s
 
 curl -b jar -H 'Content-Type: application/json' $API/gateways -d '{
   "name": "vendor-a", "port": 20001, "system_id": "vendora", "password": "secret1",
-  "tps_limit": 500, "outcome_profile_id": 2
+  "tps_limit": 500, "dlr_rule_id": 2
 }'
 ```
 
 The gateway gets the worker's IP automatically and is listening within a second. Any
-setting you leave out (or later set to `null`) follows the global defaults
+setting you leave out (or later set to `null`) follows Gateway Defaults
 (`GET/PUT /api/v1/defaults`).
 
 | Endpoint | What |
@@ -113,16 +113,17 @@ setting you leave out (or later set to `null`) follows the global defaults
 | `GET/POST /gateways`, `GET/PATCH/DELETE /gateways/{id}` | Gateways. PATCH is partial: change `port`, `worker_id` (manual failover), `status` (`active`/`disabled`), credentials or any setting |
 | `POST /gateways/{id}/reveal-password` | Shows the stored password (audited) |
 | `GET /ports/check?worker_id=&port=`, `GET /workers/{id}/ports/next-free` | Port validation and the next free port |
-| `GET/POST /profiles`, `GET/PUT/DELETE /profiles/{id}`, `POST /profiles/preview` | Shared outcome profiles; preview simulates 10,000 messages |
+| `GET/POST /dlr-rules`, `GET/PUT/DELETE /dlr-rules/{id}`, `POST /dlr-rules/preview` | DLR rules; preview simulates 10,000 messages |
 | `GET/POST /catalog/command-statuses` (+ `PATCH/DELETE /{code}`) | SMPP 3.4 list (read-only) plus vendor codes 0x400–0x4FF |
-| `GET/POST /catalog/dlr-errors` (+ `PATCH/DELETE /{code}`) | `err:` codes: system GSM MAP codes plus custom ones (e.g. `T01`) with optional `network_error_code` and DLR text |
-| `GET /catalog/dlr-statuses`, `GET/PUT /defaults` | DLR statuses; global defaults |
+| `GET/POST /catalog/dlr-errors` (+ `PATCH/DELETE /{code}`) | `err:` codes: system GSM MAP codes plus custom ones (numeric, e.g. `901`) with optional `network_error_code` and DLR text |
+| `GET /catalog/dlr-statuses`, `GET/PUT /defaults` | DLR statuses; Gateway Defaults |
 | `GET /workers`, `PATCH/DELETE /workers/{id}` | Worker registry; rename or set `draining` (no new gateways) |
 | `GET /audit` | Audit log of every change, newest first |
 
-A gateway can use a shared profile (`outcome_profile_id`) or its own: send
-`custom_outcome` with `mode`, `distribution`, optional `seed` and `entries` (each with
-`command_status`, `dlr_status`, `dlr_error`, `weight_bp`, optional `dlr_delay_min_ms`/`max_ms`).
+A gateway uses the DLR rule in `dlr_rule_id`, or the Gateway Defaults' rule when it is
+`null`. A rule has a `mode`, `distribution`, optional `seed` and `entries` (each with
+`command_status`, `dlr_status`, `dlr_error`, `weight_bp`); a `fixed` rule has exactly one entry.
+The port or worker of a gateway can only change while it is `disabled`.
 
 **Ports** are checked three times: in the worker's range and not excluded; not taken
 (Redis lock plus a database unique constraint); and actually free on the worker's host
@@ -186,10 +187,10 @@ to every gateway and a gateway overrides only the fields it sets.
 | `tps.limit`, `tps.scope` | `0` = unlimited; `bind` (each bind gets the limit) or `gateway` (shared). Excess gets `ESME_RTHROTTLED` |
 | `dlr.enabled`, `dlr.timing` | `immediate`, `fixed` (`delay_ms`) or `random` (`min_ms`–`max_ms`) |
 | `dlr.id_format`, `dlr.date_seconds`, `dlr.include_text`, `dlr.include_tlvs` | DLR format options |
-| `outcome.mode` | `fixed` (first outcome), `random` (uniform) or `weighted` (`weight_bp`, basis points totalling 10000) |
+| `outcome.mode` (the DLR rule) | `fixed` (first entry), `random` (uniform) or `weighted` (`weight_bp`, basis points totalling 10000) |
 | `outcome.distribution` | `probabilistic` (default) or `exact` (every block of 10,000 matches the weights exactly) |
 | `outcome.seed` | Optional; makes runs repeatable |
-| outcome entries | `command_status` (non-zero = rejected, no DLR; SMPP 3.4 codes or vendor 0x400–0x4FF), `dlr_status`, `dlr_error` (≤3 chars), `network_error_code` `{type, code}`, `dlr_text`, `dlr_delay` `{min_ms, max_ms}` |
+| outcome entries | `command_status` (non-zero = rejected, no DLR; SMPP 3.4 codes or vendor 0x400–0x4FF), `dlr_status`, `dlr_error` (3 digits), `network_error_code` `{type, code}`, `dlr_text` |
 
 A DLR is sent only when DLR is enabled, the message was accepted, and
 `registered_delivery` asks for it (bits `01` always, `10` failures only; intermediate

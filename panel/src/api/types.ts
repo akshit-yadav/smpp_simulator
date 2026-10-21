@@ -32,7 +32,7 @@ export interface Settings {
   dlr_include_text: boolean | null;
   dlr_include_tlvs: boolean | null;
   response_latency_ms: number | null;
-  outcome_profile_id: number | null;
+  dlr_rule_id: number | null;
 }
 
 export type SettingKey = keyof Settings;
@@ -59,35 +59,33 @@ export interface Gateway {
   version: number;
   settings: Settings;
   effective: Defaults;
-  custom_outcome: boolean;
+  dlr_rule_name: string;
   runtime: GatewayRuntime | null;
   warnings: string[];
   created_at: string;
   updated_at: string;
 }
 
-export interface OutcomeEntry {
+/** One possible result in a DLR rule. */
+export interface RuleEntry {
   name: string;
   command_status: number;
   dlr_status: DlrStatus | null;
   dlr_error: string | null;
   weight_bp: number;
-  dlr_delay_min_ms: number | null;
-  dlr_delay_max_ms: number | null;
 }
 
-export interface ProfileInput {
+export interface DlrRuleInput {
   name: string;
   description: string;
   mode: "fixed" | "random" | "weighted";
   distribution: "probabilistic" | "exact";
   seed: number | null;
-  entries: OutcomeEntry[];
+  entries: RuleEntry[];
 }
 
-export interface Profile extends ProfileInput {
+export interface DlrRule extends DlrRuleInput {
   id: number;
-  owner_gateway_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -97,7 +95,7 @@ export interface Preview {
   accepted: number;
   rejected: number;
   dlr_status: Record<string, number>;
-  entries: (Pick<OutcomeEntry, "name" | "command_status" | "dlr_status" | "dlr_error"> & {
+  entries: (Pick<RuleEntry, "name" | "command_status" | "dlr_status" | "dlr_error"> & {
     configured_pct: number;
     count: number;
     actual_pct: number;

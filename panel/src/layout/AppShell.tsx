@@ -14,10 +14,10 @@ const NAV: { group: string; items: Item[] }[] = [
   {
     group: "Gateways",
     items: [
-      { to: "/gateways", label: "Gateways" },
-      { to: "/profiles", label: "Outcome profiles" },
+      { to: "/gateways", label: "Gateway Manager" },
+      { to: "/dlr-rules", label: "DLR Rules" },
       { to: "/catalog", label: "Error catalog" },
-      { to: "/defaults", label: "Defaults" },
+      { to: "/gateway-defaults", label: "Gateway Defaults" },
     ],
   },
   {
@@ -48,6 +48,15 @@ function Brand() {
         <div className="brand-sub">Admin panel</div>
       </div>
     </div>
+  );
+}
+
+export function Footer() {
+  return (
+    <footer className="footer">
+      <span>© {new Date().getFullYear()} Hex Wireless Pvt Ltd. All rights reserved.</span>
+      <span>Power SMPP Gateway Simulator</span>
+    </footer>
   );
 }
 
@@ -103,6 +112,7 @@ export default function AppShell() {
           </header>
           <main className="main" key={location.pathname}>
             <Outlet />
+            <Footer />
           </main>
         </div>
       </div>
