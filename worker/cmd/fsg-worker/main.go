@@ -1,6 +1,6 @@
 // Command fsg-worker runs the SMPP listeners for every gateway assigned to
-// this worker. M0: config, structured logs, Redis heartbeat, /healthz and
-// /metrics. The SMPP server arrives in M1.
+// this worker: bind auth, submit_sm, outcome engine, TPS limits and DLRs.
+// Gateways come from FSG_GATEWAYS_FILE, polled every 500 ms so changes apply within 1 s.
 package main
 
 import (
@@ -22,7 +22,9 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/config"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/heartbeat"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/server"
 )
 
 var version = "dev"
@@ -65,6 +67,18 @@ func main() {
 		StartedAt: time.Now().UTC(),
 	}, 2*time.Second, log)
 
+	mgr := server.NewManager(server.Options{
+		WorkerID:    cfg.WorkerID,
+		ListenHost:  cfg.ListenHost,
+		PortAllowed: cfg.PortAllowed,
+		Redis:       rdb,
+		Registerer:  prometheus.DefaultRegisterer,
+		Log:         log,
+	})
+	mgrDone := make(chan struct{})
+	go func() { mgr.Run(ctx); close(mgrDone) }()
+	go gateway.WatchFile(ctx, cfg.GatewaysFile, 500*time.Millisecond, log, func(cfgs []gateway.Config) { mgr.Apply(cfgs) })
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
@@ -87,9 +101,11 @@ func main() {
 		"metrics_addr", cfg.MetricsAddr,
 		"redis_addr", cfg.RedisAddr,
 		"control_url", cfg.ControlURL,
+		"gateways_file", cfg.GatewaysFile,
 	)
 
 	<-ctx.Done()
+	<-mgrDone // stops listeners and persists queued DLRs
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)

@@ -16,6 +16,7 @@ licences/
 licence.json
 
 # ---- Runtime data -------------------------------------------------------------
+config/
 data/
 spill/
 *.log

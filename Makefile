@@ -1,10 +1,7 @@
-# Toolchains run in Docker, so only Docker is required on the host.
-GO_IMAGE     := golang:1.26-alpine
-PY_IMAGE     := python:3.12-slim
-NODE_IMAGE   := node:22-alpine
+# Native toolchains: Go 1.26, Node 22, and control/.venv (see README).
 COMPOSE      := docker compose
 
-.PHONY: help env build up up-bundled down logs ps test test-worker test-control test-panel lint
+.PHONY: help env build up up-bundled down logs ps test test-worker test-control test-panel bin bench
 
 help:
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -33,12 +30,18 @@ ps: ## Show service status
 test: test-worker test-control test-panel ## Run all tests
 
 test-worker:
-	docker run --rm -v "$(CURDIR)/worker:/src" -w /src $(GO_IMAGE) sh -c 'go vet ./... && go test ./...'
+	cd worker && go vet ./... && go test -race ./...
+
+bin: ## Build fsg-worker and fsg-loadgen into ./bin (needs Go)
+	cd worker && go build -o ../bin/fsg-worker ./cmd/fsg-worker
+	cd loadgen && GOWORK=off go build -o ../bin/fsg-loadgen ./cmd/fsg-loadgen
+
+# make bench GW=127.0.0.1:20001 SYS=happy PW=<password> TPS=25000 DUR=60s
+bench: bin ## Run fsg-loadgen against a gateway
+	./bin/fsg-loadgen -addr $(GW) -system-id $(SYS) -password $(PW) -binds $${BINDS:-8} -tps $(TPS) -duration $(DUR)
 
 test-control:
-	docker run --rm -v "$(CURDIR)/control:/src" -w /src $(PY_IMAGE) sh -c \
-	  'pip install -q -e ".[dev]" && ruff check . && ruff format --check . && pytest -q; s=$$?; rm -rf *.egg-info; exit $$s'
+	cd control && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/pytest -q
 
 test-panel:
-	docker run --rm -v "$(CURDIR)/panel:/src" -w /src $(NODE_IMAGE) sh -c \
-	  'npm ci --no-audit --no-fund && npm run build; s=$$?; rm -rf node_modules dist; exit $$s'
+	cd panel && npm run build

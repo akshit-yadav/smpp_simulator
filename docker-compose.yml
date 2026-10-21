@@ -42,6 +42,7 @@ services:
     ulimits:
       nofile: { soft: 1048576, hard: 1048576 }
     volumes:
+      - ./config:/etc/fsg:ro               # gateways.json, hot-reloaded within 1 s
       - worker-spill:/var/lib/fsg          # ClickHouse spill buffer (~5 GB)
       - /etc/machine-id:/etc/machine-id:ro # licence machine fingerprint
     healthcheck:

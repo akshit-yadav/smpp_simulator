@@ -52,3 +52,10 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("unexpected config: %+v", c)
 	}
 }
+
+func TestPortAllowed(t *testing.T) {
+	c := Config{PortRange: PortRange{20000, 20999}, PortExclude: []int{20022}}
+	if c.PortAllowed(20001) != nil || c.PortAllowed(19999) == nil || c.PortAllowed(21000) == nil || c.PortAllowed(20022) == nil {
+		t.Fatal("port policy")
+	}
+}

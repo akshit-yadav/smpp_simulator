@@ -1,0 +1,44 @@
+{
+  "defaults": {
+    "max_binds": 10,
+    "bind_types": ["tx", "rx", "trx"],
+    "tps": { "limit": 0, "scope": "bind" },
+    "dlr": {
+      "enabled": true, "timing": "random", "min_ms": 500, "max_ms": 2000,
+      "id_format": "hex", "date_seconds": false, "include_text": true, "include_tlvs": true
+    }
+  },
+  "gateways": [
+    {
+      "id": 1, "name": "vendor-happy", "port": 20001,
+      "system_id": "happy", "password": "__generate__",
+      "outcome": { "mode": "fixed", "outcomes": [
+        { "name": "delivered", "dlr_status": "DELIVRD", "dlr_error": "000" }
+      ]}
+    },
+    {
+      "id": 2, "name": "vendor-realistic", "port": 20002,
+      "system_id": "realistic", "password": "__generate__",
+      "tps": { "limit": 500, "scope": "gateway" },
+      "outcome": { "mode": "weighted", "distribution": "probabilistic", "outcomes": [
+        { "name": "delivered",  "dlr_status": "DELIVRD", "dlr_error": "000", "weight_bp": 9200 },
+        { "name": "undeliv",    "dlr_status": "UNDELIV", "dlr_error": "001", "weight_bp": 500,
+          "network_error_code": { "type": 3, "code": 1 } },
+        { "name": "expired",    "dlr_status": "EXPIRED", "dlr_error": "000", "weight_bp": 200,
+          "dlr_delay": { "min_ms": 10000, "max_ms": 20000 } },
+        { "name": "template",   "dlr_status": "REJECTD", "dlr_error": "T01", "dlr_text": "Template Mismatch", "weight_bp": 50 },
+        { "name": "sys error",  "command_status": 8, "weight_bp": 50 }
+      ]}
+    },
+    {
+      "id": 3, "name": "vendor-broken", "port": 20003,
+      "system_id": "broken", "password": "__generate__",
+      "max_binds": 2, "bind_types": ["trx"],
+      "dlr": { "timing": "fixed", "delay_ms": 3000 },
+      "outcome": { "mode": "weighted", "distribution": "exact", "outcomes": [
+        { "name": "rejected (vendor 0x401)", "command_status": 1025, "weight_bp": 5000 },
+        { "name": "gateway closed",          "dlr_status": "UNDELIV", "dlr_error": "G01", "dlr_text": "Gateway Closed", "weight_bp": 5000 }
+      ]}
+    }
+  ]
+}

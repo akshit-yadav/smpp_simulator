@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -30,6 +31,19 @@ type Config struct {
 	SpillDir      string
 	SpillMaxBytes int64
 	LogLevel      slog.Level
+	GatewaysFile  string // static gateway config (until the control plane serves it)
+	ListenHost    string // "" = all interfaces
+}
+
+// PortAllowed checks a gateway port against the range and exclusion list.
+func (c Config) PortAllowed(port int) error {
+	if port < c.PortRange.Min || port > c.PortRange.Max {
+		return fmt.Errorf("port %d outside range %s", port, c.PortRange)
+	}
+	if slices.Contains(c.PortExclude, port) {
+		return fmt.Errorf("port %d is excluded", port)
+	}
+	return nil
 }
 
 // Load reads the configuration from the environment. Secrets are never logged.
@@ -68,6 +82,9 @@ func Load() (Config, error) {
 	if c.SpillMaxBytes, err = strconv.ParseInt(env("FSG_SPILL_MAX_BYTES", "5368709120"), 10, 64); err != nil {
 		return c, fmt.Errorf("FSG_SPILL_MAX_BYTES: %w", err)
 	}
+
+	c.GatewaysFile = env("FSG_GATEWAYS_FILE", "/etc/fsg/gateways.json")
+	c.ListenHost = env("FSG_LISTEN_HOST", "")
 
 	if err = c.LogLevel.UnmarshalText([]byte(env("FSG_LOG_LEVEL", "info"))); err != nil {
 		return c, fmt.Errorf("FSG_LOG_LEVEL: %w", err)
