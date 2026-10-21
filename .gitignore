@@ -1,0 +1,71 @@
+# ---- Secrets & local config (never commit) ----------------------------------
+.env
+.env.*
+!.env.example
+docker-compose.override.yml
+*.pem
+*.key
+*.p12
+*.pfx
+id_ed25519*
+# Licence signing key (tools/licgen) and issued licences
+**/licgen/keys/
+*.private
+*.lic
+licences/
+licence.json
+
+# ---- Runtime data -------------------------------------------------------------
+data/
+spill/
+*.log
+logs/
+# loadgen / benchmark output
+loadgen/results/
+*.hdr
+*.pprof
+cpu.out
+mem.out
+
+# ---- Go ----------------------------------------------------------------------
+bin/
+/worker/fsg-worker
+/loadgen/fsg-loadgen
+/tools/licgen/licgen
+*.exe
+*.test
+*.out
+coverage.*
+go.work.sum
+vendor/
+
+# ---- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---- Node / panel ----------------------------------------------------------------
+node_modules/
+panel/dist/
+*.tsbuildinfo
+npm-debug.log*
+.vite/
+
+# ---- Editors & OS --------------------------------------------------------------
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*~
+.DS_Store
+Thumbs.db

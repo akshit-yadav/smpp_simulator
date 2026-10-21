@@ -1,0 +1,8 @@
+# Bundled-profile MariaDB settings (lab only).
+[mysqld]
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+default-storage-engine = InnoDB
+innodb_buffer_pool_size = 256M
+max_connections = 200
+skip-name-resolve
