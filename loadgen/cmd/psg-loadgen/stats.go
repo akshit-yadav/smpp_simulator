@@ -155,7 +155,7 @@ func (s *stats) summary(o options) summary {
 
 func (sum summary) print() {
 	fmt.Println()
-	fmt.Println("=== fsg-loadgen summary ===")
+	fmt.Println("=== psg-loadgen summary ===")
 	fmt.Printf("offered        %d TPS for %v over %d binds (window %d)\n", sum.Options.TPS, sum.Options.Duration, sum.Options.Binds, sum.Options.Window)
 	fmt.Printf("sent           %d (%.0f TPS achieved), not sent %d\n", sum.Sent, sum.AchievedTPS, sum.NotSent)
 	fmt.Printf("responses      ok %d, throttled %d, rejected %d, unanswered %d\n", sum.OK, sum.Throttled, sum.Rejected, sum.Unanswered)

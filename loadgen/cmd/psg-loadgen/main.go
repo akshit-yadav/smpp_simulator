@@ -1,9 +1,9 @@
-// Command fsg-loadgen is an open-loop, windowed SMPP load generator. It sends
+// Command psg-loadgen is an open-loop, windowed SMPP load generator. It sends
 // submit_sm at a fixed rate regardless of how fast responses come back (so a
 // slow server shows up as latency, not as lower offered load), records
 // submit_sm_resp latency and DLR delay, and answers deliver_sm.
 //
-//	fsg-loadgen -addr 127.0.0.1:20001 -system-id vendora -password secret1 \
+//	psg-loadgen -addr 127.0.0.1:20001 -system-id vendora -password secret1 \
 //	    -binds 8 -tps 25000 -duration 60s
 package main
 
@@ -45,7 +45,7 @@ func main() {
 	flag.DurationVar(&o.Duration, "duration", 30*time.Second, "how long to send")
 	flag.IntVar(&o.Window, "window", 1000, "max unacknowledged submit_sm per session")
 	flag.BoolVar(&o.DLR, "dlr", true, "request DLRs (registered_delivery=1)")
-	flag.StringVar(&o.Src, "src", "FSGTEST", "source address")
+	flag.StringVar(&o.Src, "src", "PSGTEST", "source address")
 	flag.StringVar(&o.DstPrefix, "dst-prefix", "9198", "destination prefix; 8 random digits are appended")
 	flag.DurationVar(&o.Report, "report", 5*time.Second, "progress report interval")
 	flag.DurationVar(&o.Drain, "drain", 5*time.Second, "after sending, wait this long for responses and DLRs")

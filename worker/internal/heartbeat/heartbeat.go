@@ -15,7 +15,7 @@ import (
 )
 
 var redisUp = promauto.NewGauge(prometheus.GaugeOpts{
-	Name: "fsg_worker_redis_up",
+	Name: "psg_worker_redis_up",
 	Help: "1 if the last heartbeat write to Redis succeeded.",
 })
 
@@ -30,7 +30,7 @@ type Beat struct {
 }
 
 // Key is the Redis key holding a worker's latest heartbeat.
-func Key(workerID uint8) string { return fmt.Sprintf("fsg:worker:%d:hb", workerID) }
+func Key(workerID uint8) string { return fmt.Sprintf("psg:worker:%d:hb", workerID) }
 
 // Run writes a heartbeat every interval until ctx is done. The key expires
 // after 3 missed beats. Redis being down is logged once per outage, never fatal.

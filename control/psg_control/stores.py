@@ -6,7 +6,7 @@ import httpx
 import redis
 from sqlalchemy import Engine, create_engine, text
 
-from fsg_control.settings import Settings
+from psg_control.settings import Settings
 
 log = logging.getLogger(__name__)
 

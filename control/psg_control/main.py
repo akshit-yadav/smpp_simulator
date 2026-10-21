@@ -10,8 +10,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from fsg_control import __version__, scheduler
-from fsg_control.api import (
+from psg_control import __version__, scheduler
+from psg_control.api import (
     audit_log,
     auth,
     catalog,
@@ -23,10 +23,10 @@ from fsg_control.api import (
     profiles,
     workers,
 )
-from fsg_control.auth import bootstrap_admin
-from fsg_control.security import Cipher
-from fsg_control.settings import Settings, get_settings
-from fsg_control.stores import Stores
+from psg_control.auth import bootstrap_admin
+from psg_control.security import Cipher
+from psg_control.settings import Settings, get_settings
+from psg_control.stores import Stores
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
     stores = Stores(settings)
     cipher = Cipher(settings.secret_key.get_secret_value()) if settings.secret_key else None
     if cipher is None:
-        log.warning("FSG_SECRET_KEY is not set; gateway passwords cannot be stored")
+        log.warning("PSG_SECRET_KEY is not set; gateway passwords cannot be stored")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -66,7 +66,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
         stores.close()
 
     app = FastAPI(
-        title="Fake SMPP Gateway",
+        title="Power SMPP Gateway Simulator",
         version=__version__,
         lifespan=lifespan,
         docs_url="/api/docs",

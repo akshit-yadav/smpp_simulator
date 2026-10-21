@@ -5,9 +5,9 @@ from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from fsg_control import audit
-from fsg_control.api.deps import DB, Admin, StoresDep
-from fsg_control.models import (
+from psg_control import audit
+from psg_control.api.deps import DB, Admin, StoresDep
+from psg_control.models import (
     CommandStatus,
     Defaults,
     DLRError,
@@ -15,8 +15,8 @@ from fsg_control.models import (
     OutcomeEntry,
     OutcomeProfile,
 )
-from fsg_control.schemas import PreviewIn, ProfileIn, ProfileOut
-from fsg_control.sync import Changes
+from psg_control.schemas import PreviewIn, ProfileIn, ProfileOut
+from psg_control.sync import Changes
 
 router = APIRouter(prefix="/profiles", tags=["outcome profiles"])
 

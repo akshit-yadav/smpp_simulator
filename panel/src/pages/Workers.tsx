@@ -38,14 +38,14 @@ export default function Workers() {
 
   return (
     <>
-      <PageHead title="Workers" sub="Each host runs one fsg-worker process with many SMPP listeners. Workers register themselves." />
+      <PageHead title="Workers" sub="Each host runs one psg-worker process with many SMPP listeners. Workers register themselves." />
       <Card>
         <ErrorBox error={q.error} />
         {q.isLoading ? (
           <Loading />
         ) : !q.data?.length ? (
           <Empty title="No workers yet">
-            <p>Start fsg-worker with FSG_CONTROL_URL and FSG_INTERNAL_TOKEN set; it appears here within 5 seconds.</p>
+            <p>Start psg-worker with PSG_CONTROL_URL and PSG_INTERNAL_TOKEN set; it appears here within 5 seconds.</p>
           </Empty>
         ) : (
           <div className="table-wrap">

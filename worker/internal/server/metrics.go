@@ -67,10 +67,10 @@ func newCollector(m *Manager) *collector {
 	labels := []string{"gateway", "result"}
 	return &collector{
 		m:       m,
-		submits: prometheus.NewDesc("fsg_submit_total", "submit_sm received, by result.", labels, nil),
-		dlrs:    prometheus.NewDesc("fsg_dlr_total", "DLR events, by result.", labels, nil),
-		binds:   prometheus.NewDesc("fsg_bind_total", "Bind attempts, by result.", labels, nil),
-		ses:     prometheus.NewDesc("fsg_sessions", "Bound SMPP sessions.", []string{"gateway", "bind_type"}, nil),
+		submits: prometheus.NewDesc("psg_submit_total", "submit_sm received, by result.", labels, nil),
+		dlrs:    prometheus.NewDesc("psg_dlr_total", "DLR events, by result.", labels, nil),
+		binds:   prometheus.NewDesc("psg_bind_total", "Bind attempts, by result.", labels, nil),
+		ses:     prometheus.NewDesc("psg_sessions", "Bound SMPP sessions.", []string{"gateway", "bind_type"}, nil),
 	}
 }
 
@@ -112,10 +112,10 @@ func registerMetrics(reg prometheus.Registerer, m *Manager) {
 	reg.MustRegister(
 		newCollector(m),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name: "fsg_dlr_pending", Help: "DLRs waiting in the timing wheel.",
+			Name: "psg_dlr_pending", Help: "DLRs waiting in the timing wheel.",
 		}, func() float64 { return float64(m.wheel.Len()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name: "fsg_dlr_queued", Help: "DLRs queued because no receiver is bound.",
+			Name: "psg_dlr_queued", Help: "DLRs queued because no receiver is bound.",
 		}, func() float64 { return float64(m.queue.TotalLen()) }),
 	)
 }

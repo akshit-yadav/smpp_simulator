@@ -11,7 +11,7 @@ def test_live_stats_and_sessions(admin, rdb, worker):
         json={"name": "g", "port": 20001, "system_id": "g", "password": "p"},
     ).json()
     rdb.set(
-        "fsg:stats:1",
+        "psg:stats:1",
         json.dumps(
             {
                 "ts": 1700000000000,
@@ -24,7 +24,7 @@ def test_live_stats_and_sessions(admin, rdb, worker):
         ),
     )
     rdb.set(
-        "fsg:sessions:1",
+        "psg:sessions:1",
         json.dumps(
             [
                 {

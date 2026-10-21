@@ -41,10 +41,10 @@ function Brand() {
   return (
     <div className="brand">
       <div className="brand-mark" aria-hidden>
-        FSG
+        PSG
       </div>
       <div>
-        <div className="brand-name">Fake SMPP Gateway</div>
+        <div className="brand-name">Power SMPP Gateway Simulator</div>
         <div className="brand-sub">Admin panel</div>
       </div>
     </div>
@@ -99,7 +99,7 @@ export default function AppShell() {
             <button type="button" className="btn sm" aria-label="Open menu" onClick={() => setOpen(true)}>
               ☰
             </button>
-            <strong>Fake SMPP Gateway</strong>
+            <strong>Power SMPP Gateway Simulator</strong>
           </header>
           <main className="main" key={location.pathname}>
             <Outlet />

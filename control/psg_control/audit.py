@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import Request
 from sqlalchemy.orm import Session
 
-from fsg_control.models import AuditLog
+from psg_control.models import AuditLog
 
 SECRET_FIELDS = {"password", "password_enc", "current_password", "new_password", "totp_code"}
 

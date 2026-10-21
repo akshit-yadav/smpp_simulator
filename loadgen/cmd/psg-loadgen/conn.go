@@ -93,7 +93,7 @@ func (c *conn) sendLoop() {
 			SourceAddrTON: 5, SourceAddr: c.o.Src,
 			DestAddrTON: 1, DestAddrNPI: 1, DestAddr: c.o.DstPrefix + strconv.Itoa(10_000_000+rand.IntN(90_000_000)),
 			RegisteredDelivery: rd,
-			ShortMessage:       []byte("FSG load test " + strconv.FormatUint(n, 10)),
+			ShortMessage:       []byte("PSG load test " + strconv.FormatUint(n, 10)),
 		}
 		now := time.Now()
 		c.pmu.Lock()

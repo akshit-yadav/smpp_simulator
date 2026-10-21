@@ -9,7 +9,7 @@ import json
 import sqlalchemy as sa
 from alembic import op
 
-from fsg_control.catalog import (
+from psg_control.catalog import (
     COMMAND_STATUSES,
     GSM_NETWORK_TYPE,
     SAMPLE_CUSTOM_DLR_ERRORS,

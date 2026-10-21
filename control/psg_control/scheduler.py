@@ -8,9 +8,9 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from fsg_control.api.workers import upsert_from_heartbeat
-from fsg_control.auth import utcnow
-from fsg_control.stores import Stores
+from psg_control.api.workers import upsert_from_heartbeat
+from psg_control.auth import utcnow
+from psg_control.stores import Stores
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ REGISTRY_INTERVAL_S = 5
 def sync_worker_registry(stores: Stores) -> int:
     """Registers workers and refreshes their IP, port range and last_seen from
     their heartbeats. Returns the number of live workers."""
-    keys = list(stores.redis.scan_iter(match="fsg:worker:*:hb", count=100))
+    keys = list(stores.redis.scan_iter(match="psg:worker:*:hb", count=100))
     beats = [json.loads(b) for b in stores.redis.mget(keys) if b] if keys else []
     now = utcnow()
     with Session(stores.db) as db:

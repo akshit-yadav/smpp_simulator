@@ -30,8 +30,8 @@ mem.out
 
 # ---- Go ----------------------------------------------------------------------
 bin/
-/worker/fsg-worker
-/loadgen/fsg-loadgen
+/worker/psg-worker
+/loadgen/psg-loadgen
 /tools/licgen/licgen
 *.exe
 *.test

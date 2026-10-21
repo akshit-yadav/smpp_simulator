@@ -10,11 +10,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Needs a real Redis: FSG_TEST_REDIS_ADDR=127.0.0.1:6379 (CI provides one).
+// Needs a real Redis: PSG_TEST_REDIS_ADDR=127.0.0.1:6379 (CI provides one).
 func testRedis(t *testing.T) *redis.Client {
-	addr := os.Getenv("FSG_TEST_REDIS_ADDR")
+	addr := os.Getenv("PSG_TEST_REDIS_ADDR")
 	if addr == "" {
-		t.Skip("FSG_TEST_REDIS_ADDR not set")
+		t.Skip("PSG_TEST_REDIS_ADDR not set")
 	}
 	rdb := redis.NewClient(&redis.Options{Addr: addr, DB: 15})
 	if err := rdb.Ping(context.Background()).Err(); err != nil {

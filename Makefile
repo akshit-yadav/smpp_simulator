@@ -13,7 +13,7 @@ help:
 env: ## Create .env with generated secrets (no-op if it exists)
 	./deploy/init-env.sh
 
-build: ## Build fsg-control and fsg-worker images
+build: ## Build psg-control and psg-worker images
 	$(COMPOSE) build
 
 up-bundled: env ## Run everything, including bundled MariaDB/Redis/ClickHouse
@@ -34,26 +34,26 @@ ps: ## Show service status
 test: test-stores test-worker test-control test-panel ## Run all tests
 
 test-stores: ## Start throwaway MariaDB (13399) and Redis (16399) containers for tests
-	@docker start fsg-test-mariadb >/dev/null 2>&1 || docker run -d --name fsg-test-mariadb \
+	@docker start psg-test-mariadb >/dev/null 2>&1 || docker run -d --name psg-test-mariadb \
 	  -e MARIADB_ROOT_PASSWORD=testroot -p 127.0.0.1:13399:3306 mariadb:10.11 >/dev/null
-	@docker start fsg-test-redis >/dev/null 2>&1 || docker run -d --name fsg-test-redis \
+	@docker start psg-test-redis >/dev/null 2>&1 || docker run -d --name psg-test-redis \
 	  -p 127.0.0.1:16399:6379 redis:7.2-alpine >/dev/null
-	@until docker exec fsg-test-mariadb healthcheck.sh --connect --innodb_initialized >/dev/null 2>&1; do sleep 1; done
+	@until docker exec psg-test-mariadb healthcheck.sh --connect --innodb_initialized >/dev/null 2>&1; do sleep 1; done
 
 test-worker:
-	cd worker && go vet ./... && FSG_TEST_REDIS_ADDR=$(TEST_REDIS_ADDR) go test -race ./...
+	cd worker && go vet ./... && PSG_TEST_REDIS_ADDR=$(TEST_REDIS_ADDR) go test -race ./...
 
-bin: ## Build fsg-worker and fsg-loadgen into ./bin (needs Go)
-	cd worker && go build -o ../bin/fsg-worker ./cmd/fsg-worker
-	cd loadgen && GOWORK=off go build -o ../bin/fsg-loadgen ./cmd/fsg-loadgen
+bin: ## Build psg-worker and psg-loadgen into ./bin (needs Go)
+	cd worker && go build -o ../bin/psg-worker ./cmd/psg-worker
+	cd loadgen && GOWORK=off go build -o ../bin/psg-loadgen ./cmd/psg-loadgen
 
 # make bench GW=127.0.0.1:20001 SYS=happy PW=<password> TPS=25000 DUR=60s
-bench: bin ## Run fsg-loadgen against a gateway
-	./bin/fsg-loadgen -addr $(GW) -system-id $(SYS) -password $(PW) -binds $${BINDS:-8} -tps $(TPS) -duration $(DUR)
+bench: bin ## Run psg-loadgen against a gateway
+	./bin/psg-loadgen -addr $(GW) -system-id $(SYS) -password $(PW) -binds $${BINDS:-8} -tps $(TPS) -duration $(DUR)
 
 test-control:
 	cd control && .venv/bin/ruff check . && .venv/bin/ruff format --check . && \
-	  FSG_TEST_MARIADB_URL=$(TEST_MARIADB_URL) FSG_TEST_REDIS_ADDR=$(TEST_REDIS_ADDR) .venv/bin/pytest -q
+	  PSG_TEST_MARIADB_URL=$(TEST_MARIADB_URL) PSG_TEST_REDIS_ADDR=$(TEST_REDIS_ADDR) .venv/bin/pytest -q
 
 test-panel:
 	cd panel && npm run build

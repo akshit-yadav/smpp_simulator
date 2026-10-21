@@ -3,12 +3,12 @@
 //   - On start it applies the config cached on disk, so traffic flows even if
 //     the control plane is down.
 //   - It pulls the full config from the internal API when a change is
-//     published on fsg:cfg:<worker_id>, when (re)subscribing, and when the
+//     published on psg:cfg:<worker_id>, when (re)subscribing, and when the
 //     60 s version check finds a newer version.
-//   - It answers commands on fsg:cmd:<worker_id> (port_check, kill_session)
-//     and reports each gateway's listener state to fsg:gwstatus:<worker_id>.
-//   - Every second it publishes live counters (fsg:stats:<worker_id>) and
-//     bound sessions (fsg:sessions:<worker_id>) for the panel.
+//   - It answers commands on psg:cmd:<worker_id> (port_check, kill_session)
+//     and reports each gateway's listener state to psg:gwstatus:<worker_id>.
+//   - Every second it publishes live counters (psg:stats:<worker_id>) and
+//     bound sessions (psg:sessions:<worker_id>) for the panel.
 package control
 
 import (
@@ -33,7 +33,7 @@ import (
 type Options struct {
 	WorkerID  uint8
 	URL       string // control plane base URL
-	Token     string // FSG_INTERNAL_TOKEN
+	Token     string // PSG_INTERNAL_TOKEN
 	Redis     *redis.Client
 	CachePath string
 	PortCheck func(port int) error // range/exclusion policy plus a test bind
@@ -78,7 +78,7 @@ func New(opt Options, mgr Manager) *Source {
 
 func (s *Source) channels() (cfg, cmd string) {
 	id := strconv.Itoa(int(s.opt.WorkerID))
-	return "fsg:cfg:" + id, "fsg:cmd:" + id
+	return "psg:cfg:" + id, "psg:cmd:" + id
 }
 
 // Run blocks until ctx is done.
@@ -186,7 +186,7 @@ func (s *Source) handleCommand(ctx context.Context, payload string) {
 		reply = map[string]any{"ok": false, "error": "unknown command " + c.Type}
 	}
 	data, _ := json.Marshal(reply)
-	key := "fsg:reply:" + c.ID
+	key := "psg:reply:" + c.ID
 	pipe := s.opt.Redis.TxPipeline()
 	pipe.RPush(ctx, key, data)
 	pipe.Expire(ctx, key, 30*time.Second)
@@ -258,7 +258,7 @@ func (s *Source) apply(ctx context.Context, c *Config, cache bool) {
 }
 
 func (s *Source) reportStatus(ctx context.Context) {
-	key := "fsg:gwstatus:" + strconv.Itoa(int(s.opt.WorkerID))
+	key := "psg:gwstatus:" + strconv.Itoa(int(s.opt.WorkerID))
 	pipe := s.opt.Redis.TxPipeline()
 	pipe.Del(ctx, key)
 	for id, st := range s.mgr.Status() {
@@ -296,8 +296,8 @@ func (s *Source) publishLive(ctx context.Context) {
 			}
 			sess, _ := json.Marshal(sessions)
 			pipe := s.opt.Redis.Pipeline()
-			pipe.Set(ctx, "fsg:stats:"+id, stats, 10*time.Second)
-			pipe.Set(ctx, "fsg:sessions:"+id, sess, 10*time.Second)
+			pipe.Set(ctx, "psg:stats:"+id, stats, 10*time.Second)
+			pipe.Set(ctx, "psg:sessions:"+id, sess, 10*time.Second)
 			_, _ = pipe.Exec(ctx) // best effort; never blocks traffic
 		}
 	}

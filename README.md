@@ -1,6 +1,6 @@
-# Fake SMPP Gateway (FSG)
+# Power SMPP Gateway Simulator (PSG)
 
-FSG simulates SMPP 3.4 vendor gateways so you can load-test and HA-test SMS platforms
+PSG simulates SMPP 3.4 vendor gateways so you can load-test and HA-test SMS platforms
 (sized for a 25,000 TPS benchmark). An admin creates fake gateways in a web panel. Each
 gateway is a real SMPP listener with its own port, credentials, outcome rules, DLR
 behaviour, MO traffic and TPS limit.
@@ -22,11 +22,11 @@ See [docs/build-prompt.md](docs/build-prompt.md) for the full scope.
 ## Layout
 
 ```
-worker/         Go: one process per host, many SMPP listeners       -> image fsg-worker
-control/        Python 3.12 + FastAPI: REST API, scheduler, checks  -> image fsg-control
+worker/         Go: one process per host, many SMPP listeners       -> image psg-worker
+control/        Python 3.12 + FastAPI: REST API, scheduler, checks  -> image psg-control
   migrations/     MariaDB migrations (Alembic)
   clickhouse/     ClickHouse DDL
-panel/          React + TypeScript + Vite SPA, served by fsg-control
+panel/          React + TypeScript + Vite SPA, served by psg-control
 loadgen/        Go: open-loop windowed SMPP load generator
 tools/licgen/   Go: licence signing CLI, HWPL internal only (M8)
 deploy/         Env bootstrap, example gateways file, bundled MariaDB config
@@ -36,11 +36,11 @@ docs/           Build brief, technical design, plan
 
 ## Run locally
 
-Needs Docker with Compose v2 on Linux. `fsg-control` and `fsg-worker` use
+Needs Docker with Compose v2 on Linux. `psg-control` and `psg-worker` use
 `network_mode: host`, which Docker Desktop on macOS/Windows does not fully support.
 
 ```sh
-make env           # creates .env with random secrets (admin password: FSG_ADMIN_PASSWORD)
+make env           # creates .env with random secrets (admin password: PSG_ADMIN_PASSWORD)
 make up-bundled    # builds images, starts control + worker + bundled MariaDB/Redis/ClickHouse
 make ps
 make logs
@@ -62,11 +62,11 @@ Then:
 | API docs | http://127.0.0.1:8080/api/docs |
 | Liveness / readiness | `/healthz`, `/readyz` (503 with each store's status if any are down) |
 | Worker metrics | http://127.0.0.1:9108/metrics |
-| SMPP listeners | each gateway's port (in `FSG_PORT_RANGE`, default 20000–20999) |
+| SMPP listeners | each gateway's port (in `PSG_PORT_RANGE`, default 20000–20999) |
 
 ## Admin panel
 
-Open http://127.0.0.1:8080/ and sign in as `admin` with the `FSG_ADMIN_PASSWORD` from
+Open http://127.0.0.1:8080/ and sign in as `admin` with the `PSG_ADMIN_PASSWORD` from
 `.env` (on a remote server, forward port 8080 with VS Code or `ssh -L 8080:127.0.0.1:8080`).
 
 | Screen | What you can do |
@@ -92,7 +92,7 @@ first, and the session cookie authorises the rest. With curl:
 ```sh
 API=http://127.0.0.1:8080/api/v1
 curl -c jar -H 'Content-Type: application/json' \
-     -d '{"username":"admin","password":"<FSG_ADMIN_PASSWORD>"}' $API/auth/login
+     -d '{"username":"admin","password":"<PSG_ADMIN_PASSWORD>"}' $API/auth/login
 
 curl -b jar $API/workers          # workers register themselves within ~5 s of starting
 
@@ -148,27 +148,27 @@ id:2a3f0c8e1d40001 sub:001 dlvrd:001 submit date:2610211231 done date:2610211231
 
 with the TLVs `receipted_message_id`, `message_state` and, if set, `network_error_code`.
 
-> Listeners bind to all interfaces (`FSG_LISTEN_HOST`), so remote platforms can reach
+> Listeners bind to all interfaces (`PSG_LISTEN_HOST`), so remote platforms can reach
 > them. Firewall the port range if the server is public.
 
 **With the bundled load generator:**
 
 ```sh
 make bin
-./bin/fsg-loadgen -addr 127.0.0.1:20001 -system-id vendora -password secret1 \
+./bin/psg-loadgen -addr 127.0.0.1:20001 -system-id vendora -password secret1 \
     -binds 4 -tps 2000 -duration 30s
 ```
 
 It prints throughput, `submit_sm_resp` latency percentiles, throttled/rejected counts,
 DLR status counts and DLR delay, and exits non-zero on unanswered submits or missing DLRs.
 
-**Watch it.** The dashboard and gateway pages update live. Worker metrics at http://127.0.0.1:9108/metrics: `fsg_submit_total`,
-`fsg_dlr_total`, `fsg_bind_total`, `fsg_sessions`, `fsg_dlr_pending`, `fsg_dlr_queued`.
+**Watch it.** The dashboard and gateway pages update live. Worker metrics at http://127.0.0.1:9108/metrics: `psg_submit_total`,
+`psg_dlr_total`, `psg_bind_total`, `psg_sessions`, `psg_dlr_pending`, `psg_dlr_queued`.
 `GET /api/v1/gateways` shows each gateway's listener state (`runtime`) as the worker reports it.
 
 ### Running a worker without the control plane
 
-Set `FSG_GATEWAYS_FILE=/etc/fsg/gateways.json` and the worker reads gateways from
+Set `PSG_GATEWAYS_FILE=/etc/psg/gateways.json` and the worker reads gateways from
 `config/gateways.json` instead (hot-reloaded within 1 s). `make env` writes a sample
 file with three gateways ([deploy/gateways.example.json](deploy/gateways.example.json)).
 
@@ -179,7 +179,7 @@ to every gateway and a gateway overrides only the fields it sets.
 
 | Field | Meaning |
 |---|---|
-| `id`, `name`, `port` | Unique per worker. Port must be in `FSG_PORT_RANGE` and not in `FSG_PORT_EXCLUDE` |
+| `id`, `name`, `port` | Unique per worker. Port must be in `PSG_PORT_RANGE` and not in `PSG_PORT_EXCLUDE` |
 | `system_id`, `password` | Max 15 and 8 characters |
 | `status` | `active`, `disabled` or `suspended` |
 | `max_binds`, `bind_types` | `0` = unlimited; any of `tx`, `rx`, `trx` |
@@ -200,7 +200,7 @@ a 30 s timeout is retried up to 5 times with backoff.
 ## Benchmarks
 
 Worker on loopback, 8 vCPU shared with other services, DLRs on (random 500–2000 ms),
-weighted outcomes, `fsg-loadgen` on the same host:
+weighted outcomes, `psg-loadgen` on the same host:
 
 | Offered | Duration | Sent | Errors | `submit_sm_resp` p50 / p99 / p99.9 | DLRs received | DLR delay p99 |
 |---|---|---|---|---|---|---|
@@ -214,8 +214,8 @@ GC traces ruled out as the cause.
 
 ## Using the MariaDB, Redis and ClickHouse already on the host
 
-Point the `FSG_MARIADB_*`, `FSG_REDIS_*` and `FSG_CLICKHOUSE_*` variables in `.env` at the
-existing servers, create the `fsg` database and users there, and start without the profile:
+Point the `PSG_MARIADB_*`, `PSG_REDIS_*` and `PSG_CLICKHOUSE_*` variables in `.env` at the
+existing servers, create the `psg` database and users there, and start without the profile:
 
 ```sh
 make up            # = docker compose up -d --build
@@ -226,7 +226,7 @@ The bundled stores publish only on `127.0.0.1` and on non-default ports (13306, 
 
 ## Configuration
 
-All settings are `FSG_*` environment variables. [.env.example](.env.example) documents
+All settings are `PSG_*` environment variables. [.env.example](.env.example) documents
 them all. `.env` holds secrets and is git-ignored. Never commit it.
 
 ## Development

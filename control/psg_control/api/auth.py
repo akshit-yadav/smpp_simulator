@@ -3,12 +3,12 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import delete, select
 
-from fsg_control import audit
-from fsg_control.api.deps import DB, Admin, CipherDep
-from fsg_control.auth import COOKIE, LoginError, login, verify_totp
-from fsg_control.models import Admin as AdminRow
-from fsg_control.models import AdminSession
-from fsg_control.schemas import (
+from psg_control import audit
+from psg_control.api.deps import DB, Admin, CipherDep
+from psg_control.auth import COOKIE, LoginError, login, verify_totp
+from psg_control.models import Admin as AdminRow
+from psg_control.models import AdminSession
+from psg_control.schemas import (
     LoginIn,
     MeOut,
     PasswordChangeIn,
@@ -17,7 +17,7 @@ from fsg_control.schemas import (
     TotpDisableIn,
     TotpSetupOut,
 )
-from fsg_control.security import hash_password, token_hash, verify_password
+from psg_control.security import hash_password, token_hash, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -92,7 +92,9 @@ def totp_setup(body: PasswordConfirmIn, request: Request, db: DB, admin: Admin, 
     secret = pyotp.random_base32()
     row.totp_pending_enc = cipher.encrypt(secret)
     db.commit()
-    uri = pyotp.TOTP(secret).provisioning_uri(name=row.username, issuer_name="Fake SMPP Gateway")
+    uri = pyotp.TOTP(secret).provisioning_uri(
+        name=row.username, issuer_name="Power SMPP Gateway Simulator"
+    )
     return TotpSetupOut(secret=secret, otpauth_uri=uri)
 
 

@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
-from fsg_control import audit, resolve
-from fsg_control.api.deps import DB, Admin, StoresDep
-from fsg_control.models import Defaults, Gateway, OutcomeProfile
-from fsg_control.schemas import DefaultsIn, DefaultsOut
-from fsg_control.sync import Changes
+from psg_control import audit, resolve
+from psg_control.api.deps import DB, Admin, StoresDep
+from psg_control.models import Defaults, Gateway, OutcomeProfile
+from psg_control.schemas import DefaultsIn, DefaultsOut
+from psg_control.sync import Changes
 
 router = APIRouter(prefix="/defaults", tags=["defaults"])
 

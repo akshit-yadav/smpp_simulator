@@ -1,13 +1,13 @@
 """Live views for the panel: counters and sessions published by workers
-every second (Redis keys fsg:stats:<worker_id> and fsg:sessions:<worker_id>)."""
+every second (Redis keys psg:stats:<worker_id> and psg:sessions:<worker_id>)."""
 
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
-from fsg_control import audit, sync
-from fsg_control.api.deps import DB, Admin, StoresDep
-from fsg_control.auth import utcnow
-from fsg_control.models import Gateway, Worker
+from psg_control import audit, sync
+from psg_control.api.deps import DB, Admin, StoresDep
+from psg_control.auth import utcnow
+from psg_control.models import Gateway, Worker
 
 router = APIRouter(tags=["live"])
 
@@ -18,7 +18,7 @@ def live(db: DB, admin: Admin, stores: StoresDep):
     Poll it and diff consecutive answers to get rates."""
     workers, gateways = [], {}
     for w in db.scalars(select(Worker).order_by(Worker.id)):
-        stats = sync.live_json(stores, f"fsg:stats:{w.id}") or {}
+        stats = sync.live_json(stores, f"psg:stats:{w.id}") or {}
         workers.append(
             {
                 "id": w.id,
@@ -45,7 +45,7 @@ def _gateway(db, gateway_id: int) -> Gateway:
 def gateway_sessions(gateway_id: int, db: DB, admin: Admin, stores: StoresDep):
     """Bound SMPP sessions of a gateway, as last reported by its worker."""
     gw = _gateway(db, gateway_id)
-    sessions = sync.live_json(stores, f"fsg:sessions:{gw.worker_id}") or []
+    sessions = sync.live_json(stores, f"psg:sessions:{gw.worker_id}") or []
     return [s for s in sessions if s["gateway_id"] == gw.id]
 
 

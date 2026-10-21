@@ -14,7 +14,7 @@ import (
 
 const maxQueuedPerGateway = 2_000_000
 
-func streamKey(gatewayID int64) string { return "fsg:dlrq:" + strconv.FormatInt(gatewayID, 10) }
+func streamKey(gatewayID int64) string { return "psg:dlrq:" + strconv.FormatInt(gatewayID, 10) }
 
 // dlrQueue holds DLRs for gateways with no receiver bound. Jobs live in
 // memory; a background persist (once a second, never on the hot path) mirrors

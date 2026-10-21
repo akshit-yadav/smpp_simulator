@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from fsg_control.catalog import DLR_STATUSES
+from psg_control.catalog import DLR_STATUSES
 
 BindType = Literal["tx", "rx", "trx"]
 DlrStatus = Literal[

@@ -11,15 +11,15 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from fsg_control import audit
-from fsg_control.db import get_db
-from fsg_control.models import Admin, AdminSession
-from fsg_control.security import hash_password, new_token, token_hash, verify_password
-from fsg_control.settings import Settings
+from psg_control import audit
+from psg_control.db import get_db
+from psg_control.models import Admin, AdminSession
+from psg_control.security import hash_password, new_token, token_hash, verify_password
+from psg_control.settings import Settings
 
 log = logging.getLogger(__name__)
 
-COOKIE = "fsg_session"
+COOKIE = "psg_session"
 
 
 def utcnow() -> datetime:
@@ -41,11 +41,11 @@ class LoginError(Exception):
 
 
 def bootstrap_admin(db: Session, settings: Settings) -> bool:
-    """Creates the admin from FSG_ADMIN_USERNAME/PASSWORD if none exists."""
+    """Creates the admin from PSG_ADMIN_USERNAME/PASSWORD if none exists."""
     if db.scalar(select(Admin.id).limit(1)) is not None:
         return False
     if settings.admin_password is None or not settings.admin_password.get_secret_value():
-        log.warning("no admin account and FSG_ADMIN_PASSWORD is not set; login is impossible")
+        log.warning("no admin account and PSG_ADMIN_PASSWORD is not set; login is impossible")
         return False
     db.add(
         Admin(
@@ -56,7 +56,7 @@ def bootstrap_admin(db: Session, settings: Settings) -> bool:
     )
     audit.record(db, None, "system", "admin.bootstrap", "admin", settings.admin_username)
     db.commit()
-    log.info("created admin account %r from FSG_ADMIN_USERNAME", settings.admin_username)
+    log.info("created admin account %r from PSG_ADMIN_USERNAME", settings.admin_username)
     return True
 
 

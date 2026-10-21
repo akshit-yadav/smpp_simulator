@@ -3,10 +3,10 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import func, select
 
-from fsg_control import audit, sync
-from fsg_control.api.deps import DB, Admin, StoresDep
-from fsg_control.models import Gateway, Worker
-from fsg_control.schemas import WorkerOut, WorkerPatch
+from psg_control import audit, sync
+from psg_control.api.deps import DB, Admin, StoresDep
+from psg_control.models import Gateway, Worker
+from psg_control.schemas import WorkerOut, WorkerPatch
 
 router = APIRouter(prefix="/workers", tags=["workers"])
 

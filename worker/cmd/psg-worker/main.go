@@ -1,8 +1,8 @@
-// Command fsg-worker runs the SMPP listeners for every gateway assigned to
+// Command psg-worker runs the SMPP listeners for every gateway assigned to
 // this worker: bind auth, submit_sm, outcome engine, TPS limits and DLRs.
 //
-// Gateways come from the control plane (FSG_CONTROL_URL), or from a static
-// file when FSG_GATEWAYS_FILE is set (polled every 500 ms).
+// Gateways come from the control plane (PSG_CONTROL_URL), or from a static
+// file when PSG_GATEWAYS_FILE is set (polled every 500 ms).
 package main
 
 import (
@@ -33,7 +33,7 @@ import (
 var version = "dev"
 
 var workerInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{
-	Name: "fsg_worker_info",
+	Name: "psg_worker_info",
 	Help: "Static worker information.",
 }, []string{"worker_id", "ip", "version"})
 

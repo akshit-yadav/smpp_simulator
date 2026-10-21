@@ -19,7 +19,7 @@ const (
 	outQueueLen = 4096 // encoded PDUs waiting for the writer
 	dlrQueueLen = 8192 // DLRs waiting for a window slot on this session
 	windowSize  = 1000 // max deliver_sm in flight per session
-	smscName    = "FSG"
+	smscName    = "PSG"
 )
 
 var sessionIDs atomic.Uint64

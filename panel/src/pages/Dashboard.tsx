@@ -49,7 +49,7 @@ export default function Dashboard() {
           </div>
         )}
         {ws.length === 0 && (
-          <div className="alert warning">No worker has registered yet. Start fsg-worker; it appears here within a few seconds.</div>
+          <div className="alert warning">No worker has registered yet. Start psg-worker; it appears here within a few seconds.</div>
         )}
 
         <div className="grid grid-4">

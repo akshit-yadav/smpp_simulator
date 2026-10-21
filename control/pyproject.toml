@@ -3,9 +3,9 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fsg-control"
+name = "psg-control"
 version = "0.1.0"
-description = "Fake SMPP Gateway control plane: REST API, scheduler, licence and port checks, reports"
+description = "Power SMPP Gateway Simulator control plane: REST API, scheduler, licence and port checks, reports"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115,<1",
@@ -28,7 +28,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["fsg_control*"]
+include = ["psg_control*"]
 
 [tool.ruff]
 line-length = 100

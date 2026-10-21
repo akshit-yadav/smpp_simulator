@@ -5,11 +5,11 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from fsg_control import audit, ports, resolve, sync
-from fsg_control.api.deps import DB, Admin, CipherDep, StoresDep
-from fsg_control.api.profiles import apply as apply_profile
-from fsg_control.models import SETTING_COLUMNS, Defaults, Gateway, OutcomeProfile, Worker
-from fsg_control.schemas import (
+from psg_control import audit, ports, resolve, sync
+from psg_control.api.deps import DB, Admin, CipherDep, StoresDep
+from psg_control.api.profiles import apply as apply_profile
+from psg_control.models import SETTING_COLUMNS, Defaults, Gateway, OutcomeProfile, Worker
+from psg_control.schemas import (
     GatewayCreate,
     GatewayOut,
     GatewayUpdate,
@@ -17,7 +17,7 @@ from fsg_control.schemas import (
     ProfileOut,
     Settings,
 )
-from fsg_control.stores import Stores
+from psg_control.stores import Stores
 
 router = APIRouter(tags=["gateways"])
 

@@ -35,15 +35,15 @@ func TestParsePortList(t *testing.T) {
 }
 
 func TestLoadRejectsWorkerIDOutOfRange(t *testing.T) {
-	t.Setenv("FSG_WORKER_ID", "256")
+	t.Setenv("PSG_WORKER_ID", "256")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for worker ID 256")
 	}
 }
 
 func TestLoadDefaults(t *testing.T) {
-	t.Setenv("FSG_WORKER_ID", "7")
-	t.Setenv("FSG_WORKER_IP", "10.0.0.5")
+	t.Setenv("PSG_WORKER_ID", "7")
+	t.Setenv("PSG_WORKER_IP", "10.0.0.5")
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)

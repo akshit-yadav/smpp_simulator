@@ -1,19 +1,19 @@
-"""Worker-facing API. Authenticated with FSG_INTERNAL_TOKEN; returns plain passwords."""
+"""Worker-facing API. Authenticated with PSG_INTERNAL_TOKEN; returns plain passwords."""
 
 import hmac
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from fsg_control import resolve
-from fsg_control.api.deps import DB, CipherDep
-from fsg_control.models import Worker
+from psg_control import resolve
+from psg_control.api.deps import DB, CipherDep
+from psg_control.models import Worker
 
 
 def require_token(request: Request) -> None:
     expected = request.app.state.settings.internal_token
     if expected is None or not expected.get_secret_value():
-        raise HTTPException(status_code=503, detail="FSG_INTERNAL_TOKEN is not configured.")
+        raise HTTPException(status_code=503, detail="PSG_INTERNAL_TOKEN is not configured.")
     given = request.headers.get("authorization", "").removeprefix("Bearer ")
     if not hmac.compare_digest(given.encode(), expected.get_secret_value().encode()):
         raise HTTPException(status_code=401, detail="Invalid internal token.")

@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Query
 from sqlalchemy import select
 
-from fsg_control.api.deps import DB, Admin
-from fsg_control.models import AuditLog
-from fsg_control.schemas import AuditOut
+from psg_control.api.deps import DB, Admin
+from psg_control.models import AuditLog
+from psg_control.schemas import AuditOut
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 

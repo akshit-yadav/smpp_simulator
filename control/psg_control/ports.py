@@ -14,9 +14,9 @@ from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from fsg_control import sync
-from fsg_control.models import Gateway, Worker
-from fsg_control.stores import Stores
+from psg_control import sync
+from psg_control.models import Gateway, Worker
+from psg_control.stores import Stores
 
 LOCK_TTL_S = 30
 
@@ -80,7 +80,7 @@ def port_lock(
 ) -> Iterator[None]:
     """Layer 2a: a short Redis lock so two requests cannot claim one port at once.
     If Redis is down the MariaDB unique constraint still protects the port."""
-    key = f"fsg:portlock:{worker_id}:{port}"
+    key = f"psg:portlock:{worker_id}:{port}"
     redis_ok = True
     try:
         locked = bool(stores.redis.set(key, "1", nx=True, ex=LOCK_TTL_S))  # None if held

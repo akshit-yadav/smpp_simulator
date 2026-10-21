@@ -1,22 +1,22 @@
-# Fake SMPP Gateway (FSG)
+# Power SMPP Gateway Simulator (PSG)
 #
 #   cp .env.example .env            # or: make env  (generates secrets)
 #   docker compose --profile bundled up -d --build   # lab: own MariaDB/Redis/ClickHouse
 #   docker compose up -d --build                     # host already runs MariaDB/Redis/ClickHouse
 #
-# fsg-control and fsg-worker use host networking: one worker process binds many
-# SMPP listeners (FSG_PORT_RANGE) directly on the host IP. The bundled stores use
+# psg-control and psg-worker use host networking: one worker process binds many
+# SMPP listeners (PSG_PORT_RANGE) directly on the host IP. The bundled stores use
 # bridge networking and publish on 127.0.0.1 only, on non-default ports, so they
 # never clash with stores that already run on the host.
 #
-# There is deliberately no depends_on between fsg-* and the stores: the stores
+# There is deliberately no depends_on between psg-* and the stores: the stores
 # live in an optional profile, and both services must tolerate stores being down.
 
-name: fsg
+name: psg
 
 services:
   control:
-    image: fsg-control:${FSG_VERSION:-dev}
+    image: psg-control:${PSG_VERSION:-dev}
     build:
       context: .
       dockerfile: control/Dockerfile
@@ -24,29 +24,29 @@ services:
     env_file: .env
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('FSG_HTTP_PORT','8080')}/healthz\", timeout=2)"]
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('PSG_HTTP_PORT','8080')}/healthz\", timeout=2)"]
       interval: 10s
       timeout: 3s
       retries: 3
       start_period: 20s
 
   worker:
-    image: fsg-worker:${FSG_VERSION:-dev}
+    image: psg-worker:${PSG_VERSION:-dev}
     build:
       context: worker
       args:
-        VERSION: ${FSG_VERSION:-dev}
+        VERSION: ${PSG_VERSION:-dev}
     network_mode: host
     env_file: .env
     restart: unless-stopped
     ulimits:
       nofile: { soft: 1048576, hard: 1048576 }
     volumes:
-      - ./config:/etc/fsg:ro               # gateways.json, hot-reloaded within 1 s
-      - worker-spill:/var/lib/fsg          # ClickHouse spill buffer (~5 GB)
+      - ./config:/etc/psg:ro               # gateways.json, hot-reloaded within 1 s
+      - worker-spill:/var/lib/psg          # ClickHouse spill buffer (~5 GB)
       - /etc/machine-id:/etc/machine-id:ro # licence machine fingerprint
     healthcheck:
-      test: ["CMD", "/usr/local/bin/fsg-worker", "healthcheck"]
+      test: ["CMD", "/usr/local/bin/psg-worker", "healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -60,11 +60,11 @@ services:
     restart: unless-stopped
     environment:
       MARIADB_ROOT_PASSWORD: ${BUNDLED_MARIADB_ROOT_PASSWORD:?set BUNDLED_MARIADB_ROOT_PASSWORD in .env}
-      MARIADB_DATABASE: ${FSG_MARIADB_DATABASE:-fsg}
-      MARIADB_USER: ${FSG_MARIADB_USER:-fsg}
-      MARIADB_PASSWORD: ${FSG_MARIADB_PASSWORD:?set FSG_MARIADB_PASSWORD in .env}
+      MARIADB_DATABASE: ${PSG_MARIADB_DATABASE:-psg}
+      MARIADB_USER: ${PSG_MARIADB_USER:-psg}
+      MARIADB_PASSWORD: ${PSG_MARIADB_PASSWORD:?set PSG_MARIADB_PASSWORD in .env}
     ports:
-      - "127.0.0.1:${FSG_MARIADB_PORT:-13306}:3306"
+      - "127.0.0.1:${PSG_MARIADB_PORT:-13306}:3306"
     volumes:
       - mariadb-data:/var/lib/mysql
       - ./deploy/mariadb/conf.d:/etc/mysql/conf.d:ro
@@ -79,31 +79,31 @@ services:
     image: redis:7.2-alpine
     restart: unless-stopped
     # AOF on: queued DLRs are persisted to Redis streams.
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${FSG_REDIS_PASSWORD:?set FSG_REDIS_PASSWORD in .env}"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${PSG_REDIS_PASSWORD:?set PSG_REDIS_PASSWORD in .env}"]
     ports:
-      - "127.0.0.1:${FSG_REDIS_PORT:-16379}:6379"
+      - "127.0.0.1:${PSG_REDIS_PORT:-16379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$FSG_REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$PSG_REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 10
     environment:
-      FSG_REDIS_PASSWORD: ${FSG_REDIS_PASSWORD}
+      PSG_REDIS_PASSWORD: ${PSG_REDIS_PASSWORD}
 
   clickhouse:
     profiles: [bundled]
     image: clickhouse/clickhouse-server:24.8
     restart: unless-stopped
     environment:
-      CLICKHOUSE_DB: ${FSG_CLICKHOUSE_DATABASE:-fsg}
-      CLICKHOUSE_USER: ${FSG_CLICKHOUSE_USER:-fsg}
-      CLICKHOUSE_PASSWORD: ${FSG_CLICKHOUSE_PASSWORD:?set FSG_CLICKHOUSE_PASSWORD in .env}
+      CLICKHOUSE_DB: ${PSG_CLICKHOUSE_DATABASE:-psg}
+      CLICKHOUSE_USER: ${PSG_CLICKHOUSE_USER:-psg}
+      CLICKHOUSE_PASSWORD: ${PSG_CLICKHOUSE_PASSWORD:?set PSG_CLICKHOUSE_PASSWORD in .env}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
-      - "127.0.0.1:${FSG_CLICKHOUSE_HTTP_PORT:-18123}:8123"
-      - "127.0.0.1:${FSG_CLICKHOUSE_NATIVE_PORT:-19000}:9000"
+      - "127.0.0.1:${PSG_CLICKHOUSE_HTTP_PORT:-18123}:8123"
+      - "127.0.0.1:${PSG_CLICKHOUSE_NATIVE_PORT:-19000}:9000"
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     volumes:

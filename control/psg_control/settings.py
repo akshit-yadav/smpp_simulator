@@ -6,9 +6,9 @@ from sqlalchemy import URL
 
 
 class Settings(BaseSettings):
-    """Control-plane settings, read from FSG_* environment variables."""
+    """Control-plane settings, read from PSG_* environment variables."""
 
-    model_config = SettingsConfigDict(env_prefix="FSG_", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="PSG_", extra="ignore")
 
     http_host: str = "127.0.0.1"
     http_port: int = 8080
@@ -27,8 +27,8 @@ class Settings(BaseSettings):
 
     mariadb_host: str = "127.0.0.1"
     mariadb_port: int = 3306
-    mariadb_database: str = "fsg"
-    mariadb_user: str = "fsg"
+    mariadb_database: str = "psg"
+    mariadb_user: str = "psg"
     mariadb_password: SecretStr = SecretStr("")
 
     redis_host: str = "127.0.0.1"
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     clickhouse_host: str = "127.0.0.1"
     clickhouse_http_port: int = 8123
-    clickhouse_database: str = "fsg"
+    clickhouse_database: str = "psg"
     clickhouse_user: str = "default"
     clickhouse_password: SecretStr = SecretStr("")
 

@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
-from fsg_control import audit
-from fsg_control.api.deps import DB, Admin, StoresDep
-from fsg_control.catalog import DLR_STATUSES
-from fsg_control.models import CommandStatus, DLRError, OutcomeEntry
-from fsg_control.schemas import (
+from psg_control import audit
+from psg_control.api.deps import DB, Admin, StoresDep
+from psg_control.catalog import DLR_STATUSES
+from psg_control.models import CommandStatus, DLRError, OutcomeEntry
+from psg_control.schemas import (
     CommandStatusIn,
     CommandStatusOut,
     CommandStatusPatch,
@@ -13,7 +13,7 @@ from fsg_control.schemas import (
     DlrErrorOut,
     DlrErrorPatch,
 )
-from fsg_control.sync import Changes
+from psg_control.sync import Changes
 
 router = APIRouter(prefix="/catalog", tags=["catalogs"])
 

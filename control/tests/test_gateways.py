@@ -82,7 +82,7 @@ def test_port_validation_layers(admin, worker):
     }
 
     # Layer 2: another request holds the port lock.
-    admin.app.state.stores.redis.set("fsg:portlock:1:20007", "1", ex=30)
+    admin.app.state.stores.redis.set("psg:portlock:1:20007", "1", ex=30)
     assert admin.post(GW, json=new_gw(name="b", port=20007)).status_code == 409
 
     # Layer 3: something else on the worker host uses the port.
@@ -187,7 +187,7 @@ def test_custom_outcome_profile(admin, worker):
 
 def test_move_disable_delete(admin, rdb, worker):
     w2 = FakeWorker(rdb, 2)
-    from fsg_control.scheduler import sync_worker_registry
+    from psg_control.scheduler import sync_worker_registry
 
     sync_worker_registry(admin.app.state.stores)
     gw = admin.post(GW, json=new_gw(worker_id=1)).json()
@@ -202,10 +202,10 @@ def test_move_disable_delete(admin, rdb, worker):
     )
     assert internal_config(admin, 2)["gateways"][0]["status"] == "disabled"
 
-    rdb.xadd(f"fsg:dlrq:{gw['id']}", {"j": "{}"})
+    rdb.xadd(f"psg:dlrq:{gw['id']}", {"j": "{}"})
     assert admin.delete(f"{GW}/{gw['id']}").status_code == 204
     assert internal_config(admin, 2)["gateways"] == []
-    assert not rdb.exists(f"fsg:dlrq:{gw['id']}")  # its queued DLRs go with it
+    assert not rdb.exists(f"psg:dlrq:{gw['id']}")  # its queued DLRs go with it
     assert admin.get(f"{GW}/{gw['id']}").status_code == 404
     w2.stop()
 
@@ -218,5 +218,5 @@ def test_draining_worker_takes_no_new_gateways(admin, worker):
 
 def test_runtime_status_from_worker(admin, rdb, worker):
     gw = admin.post(GW, json=new_gw()).json()
-    rdb.hset("fsg:gwstatus:1", str(gw["id"]), '{"state": "listening", "port": 20001}')
+    rdb.hset("psg:gwstatus:1", str(gw["id"]), '{"state": "listening", "port": 20001}')
     assert admin.get(f"{GW}/{gw['id']}").json()["runtime"]["state"] == "listening"

@@ -21,9 +21,9 @@ class Cipher:
         try:
             key = base64.b64decode(key_b64, validate=True)
         except (binascii.Error, ValueError) as exc:
-            raise ValueError("FSG_SECRET_KEY must be base64") from exc
+            raise ValueError("PSG_SECRET_KEY must be base64") from exc
         if len(key) != 32:
-            raise ValueError("FSG_SECRET_KEY must decode to 32 bytes (openssl rand -base64 32)")
+            raise ValueError("PSG_SECRET_KEY must decode to 32 bytes (openssl rand -base64 32)")
         self._aead = AESGCM(key)
 
     def encrypt(self, plaintext: str) -> bytes:

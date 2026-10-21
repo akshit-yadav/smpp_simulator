@@ -103,9 +103,9 @@ func (fc *fakeControl) handler(t *testing.T) http.Handler {
 }
 
 func testRedis(t *testing.T) *redis.Client {
-	addr := os.Getenv("FSG_TEST_REDIS_ADDR")
+	addr := os.Getenv("PSG_TEST_REDIS_ADDR")
 	if addr == "" {
-		t.Skip("FSG_TEST_REDIS_ADDR not set")
+		t.Skip("PSG_TEST_REDIS_ADDR not set")
 	}
 	rdb := redis.NewClient(&redis.Options{Addr: addr, DB: 13})
 	rdb.FlushDB(context.Background())
@@ -158,7 +158,7 @@ func TestSyncOnStartAndOnPublish(t *testing.T) {
 		t.Fatalf("applied %+v", got) // invalid gateway 2 is skipped, defaults filled in
 	}
 	waitFor(t, "status report", func() bool {
-		v, _ := rdb.HGet(context.Background(), "fsg:gwstatus:7", "1").Result()
+		v, _ := rdb.HGet(context.Background(), "psg:gwstatus:7", "1").Result()
 		return v != ""
 	})
 
@@ -166,7 +166,7 @@ func TestSyncOnStartAndOnPublish(t *testing.T) {
 	fc.version.Store(2)
 	fc.port.Store(20002)
 	begin := time.Now()
-	rdb.Publish(context.Background(), "fsg:cfg:7", `{"gateway_id":1,"version":2,"action":"update"}`)
+	rdb.Publish(context.Background(), "psg:cfg:7", `{"gateway_id":1,"version":2,"action":"update"}`)
 	waitFor(t, "update", func() bool { return mgr.last()[0].Port == 20002 })
 	if d := time.Since(begin); d > time.Second {
 		t.Fatalf("change took %v", d)
@@ -224,8 +224,8 @@ func TestPortCheckCommand(t *testing.T) {
 	start(t, rdb, fc, "", &fakeManager{})
 	ctx := context.Background()
 	waitFor(t, "subscription", func() bool {
-		n, _ := rdb.PubSubNumSub(ctx, "fsg:cmd:7").Result()
-		return n["fsg:cmd:7"] == 1
+		n, _ := rdb.PubSubNumSub(ctx, "psg:cmd:7").Result()
+		return n["psg:cmd:7"] == 1
 	})
 
 	cmds := map[string]bool{
@@ -239,8 +239,8 @@ func TestPortCheckCommand(t *testing.T) {
 		var c command
 		json.Unmarshal([]byte(cmd), &c)
 		id := c.ID
-		rdb.Publish(ctx, "fsg:cmd:7", cmd)
-		res, err := rdb.BLPop(ctx, 2*time.Second, "fsg:reply:"+id).Result()
+		rdb.Publish(ctx, "psg:cmd:7", cmd)
+		res, err := rdb.BLPop(ctx, 2*time.Second, "psg:reply:"+id).Result()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -262,19 +262,19 @@ func TestPublishesLiveStatsAndSessions(t *testing.T) {
 	fc.port.Store(20001)
 	start(t, rdb, fc, "", &fakeManager{})
 	ctx := context.Background()
-	waitFor(t, "live stats", func() bool { return rdb.Exists(ctx, "fsg:stats:7").Val() == 1 })
+	waitFor(t, "live stats", func() bool { return rdb.Exists(ctx, "psg:stats:7").Val() == 1 })
 
 	var live LiveStats
-	json.Unmarshal([]byte(rdb.Get(ctx, "fsg:stats:7").Val()), &live)
+	json.Unmarshal([]byte(rdb.Get(ctx, "psg:stats:7").Val()), &live)
 	if live.Gateways[1].Accepted != 42 || live.DLRPending != 3 || live.DLRQueued != 4 || live.TS == 0 {
 		t.Fatalf("live stats %+v", live)
 	}
 	var sess []server.SessionInfo
-	json.Unmarshal([]byte(rdb.Get(ctx, "fsg:sessions:7").Val()), &sess)
+	json.Unmarshal([]byte(rdb.Get(ctx, "psg:sessions:7").Val()), &sess)
 	if len(sess) != 1 || sess[0].ID != 5 {
 		t.Fatalf("sessions %+v", sess)
 	}
-	if ttl := rdb.TTL(ctx, "fsg:stats:7").Val(); ttl <= 0 || ttl > 10*time.Second {
+	if ttl := rdb.TTL(ctx, "psg:stats:7").Val(); ttl <= 0 || ttl > 10*time.Second {
 		t.Fatalf("ttl %v", ttl)
 	}
 }

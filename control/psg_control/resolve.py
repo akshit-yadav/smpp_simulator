@@ -4,7 +4,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from fsg_control.models import (
+from psg_control.models import (
     SETTING_COLUMNS,
     Defaults,
     DLRError,
@@ -12,7 +12,7 @@ from fsg_control.models import (
     OutcomeProfile,
     Worker,
 )
-from fsg_control.security import Cipher
+from psg_control.security import Cipher
 
 
 def defaults(db: Session) -> Defaults:

@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
-from fsg_control.main import create_app
-from fsg_control.settings import Settings
+from psg_control.main import create_app
+from psg_control.settings import Settings
 
 
 def make_client() -> TestClient:
