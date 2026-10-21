@@ -12,8 +12,10 @@ behaviour, MO traffic and TPS limit.
 | M0 Scaffolding: compose, CI, health, worker registry | ✅ Done |
 | M1 Worker core: SMPP 3.4 codec, bind auth, `submit_sm`, `enquire_link`, `unbind`, many listeners | ✅ Done |
 | M2 Hot path: outcome engine, TPS limits, timing-wheel DLRs, DLR delivery/queue/retry, load generator | ✅ Done (short benchmark runs, see below) |
-| M3 Control plane: admin login, gateway/profile CRUD in MariaDB, Redis config sync | ⏳ Next. Until then gateways come from `config/gateways.json` |
-| M4–M9 Reports, panel screens, `submit_multi`/`data_sm`/`query_sm`…, MO, licensing, hardening | ⏳ Not started |
+| M3 Control plane: admin login + TOTP, audit log, gateway/profile/catalog/defaults API, 3-layer port check, config sync, worker registry | ✅ Done. Manage gateways through the REST API (Swagger UI at `/api/docs`) |
+| M4 Events and reports (ClickHouse) | ⏳ Next |
+| M5 Panel screens | ⏳ Not started. Until then use the API |
+| M6–M9 `submit_multi`/`data_sm`/`query_sm`…, overrides, MO, licensing, hardening | ⏳ Not started |
 
 See [docs/build-prompt.md](docs/build-prompt.md) for the full scope.
 
@@ -38,7 +40,7 @@ Needs Docker with Compose v2 on Linux. `fsg-control` and `fsg-worker` use
 `network_mode: host`, which Docker Desktop on macOS/Windows does not fully support.
 
 ```sh
-make env           # creates .env and config/gateways.json with random secrets
+make env           # creates .env with random secrets (admin password: FSG_ADMIN_PASSWORD)
 make up-bundled    # builds images, starts control + worker + bundled MariaDB/Redis/ClickHouse
 make ps
 make logs
@@ -60,18 +62,61 @@ Then:
 | API docs | http://127.0.0.1:8080/api/docs |
 | Liveness / readiness | `/healthz`, `/readyz` (503 with each store's status if any are down) |
 | Worker metrics | http://127.0.0.1:9108/metrics |
-| SMPP listeners | the ports in `config/gateways.json` (samples: 20001–20003) |
+| SMPP listeners | each gateway's port (in `FSG_PORT_RANGE`, default 20000–20999) |
+
+## Manage gateways (REST API)
+
+Log in with `admin` and the `FSG_ADMIN_PASSWORD` from `.env`. The interactive API docs at
+http://127.0.0.1:8080/api/docs work in the browser: call `POST /api/v1/auth/login` there
+first, and the session cookie authorises the rest. With curl:
+
+```sh
+API=http://127.0.0.1:8080/api/v1
+curl -c jar -H 'Content-Type: application/json' \
+     -d '{"username":"admin","password":"<FSG_ADMIN_PASSWORD>"}' $API/auth/login
+
+curl -b jar $API/workers          # workers register themselves within ~5 s of starting
+
+curl -b jar -H 'Content-Type: application/json' $API/gateways -d '{
+  "name": "vendor-a", "port": 20001, "system_id": "vendora", "password": "secret1",
+  "tps_limit": 500, "outcome_profile_id": 2
+}'
+```
+
+The gateway gets the worker's IP automatically and is listening within a second. Any
+setting you leave out (or later set to `null`) follows the global defaults
+(`GET/PUT /api/v1/defaults`).
+
+| Endpoint | What |
+|---|---|
+| `POST /auth/login`, `/auth/logout`, `GET /auth/me` | Session cookie (HttpOnly, SameSite=Strict); 5 failures lock login for 5 min |
+| `POST /auth/password`, `/auth/totp/setup`, `/auth/totp/enable`, `/auth/totp/disable` | Password change, optional TOTP (any authenticator app) |
+| `GET/POST /gateways`, `GET/PATCH/DELETE /gateways/{id}` | Gateways. PATCH is partial: change `port`, `worker_id` (manual failover), `status` (`active`/`disabled`), credentials or any setting |
+| `POST /gateways/{id}/reveal-password` | Shows the stored password (audited) |
+| `GET /ports/check?worker_id=&port=`, `GET /workers/{id}/ports/next-free` | Port validation and the next free port |
+| `GET/POST /profiles`, `GET/PUT/DELETE /profiles/{id}`, `POST /profiles/preview` | Shared outcome profiles; preview simulates 10,000 messages |
+| `GET/POST /catalog/command-statuses` (+ `PATCH/DELETE /{code}`) | SMPP 3.4 list (read-only) plus vendor codes 0x400–0x4FF |
+| `GET/POST /catalog/dlr-errors` (+ `PATCH/DELETE /{code}`) | `err:` codes: system GSM MAP codes plus custom ones (e.g. `T01`) with optional `network_error_code` and DLR text |
+| `GET /catalog/dlr-statuses`, `GET/PUT /defaults` | DLR statuses; global defaults |
+| `GET /workers`, `PATCH/DELETE /workers/{id}` | Worker registry; rename or set `draining` (no new gateways) |
+| `GET /audit` | Audit log of every change, newest first |
+
+A gateway can use a shared profile (`outcome_profile_id`) or its own: send
+`custom_outcome` with `mode`, `distribution`, optional `seed` and `entries` (each with
+`command_status`, `dlr_status`, `dlr_error`, `weight_bp`, optional `dlr_delay_min_ms`/`max_ms`).
+
+**Ports** are checked three times: in the worker's range and not excluded; not taken
+(Redis lock plus a database unique constraint); and actually free on the worker's host
+(the worker test-binds it). A conflict answers `409` with *"Port 20001 is already in use.
+Please choose another port."* and a `suggested_port`.
+
+**Config sync.** Every change is written to MariaDB and announced on Redis; the worker
+pulls its config within a second and caches it on disk. Workers keep serving their last
+config if the control plane, MariaDB or Redis is down, and re-check every 60 s.
 
 ## Test the simulator
 
-`make env` creates three sample gateways in `config/gateways.json`. Each gateway's
-`system_id` and `password` are in that file.
-
-| Gateway | Port | system_id | Behaviour |
-|---|---|---|---|
-| vendor-happy | 20001 | `happy` | Accepts everything; DELIVRD DLR after 0.5–2 s |
-| vendor-realistic | 20002 | `realistic` | 500 TPS gateway limit; 92% DELIVRD, 5% UNDELIV, 2% EXPIRED (DLR after 10–20 s), 0.5% REJECTD `err:T01`, 0.5% rejected with `ESME_RSYSERR` |
-| vendor-broken | 20003 | `broken` | TRX only, max 2 binds; exactly 50% rejected with vendor code 0x401, 50% UNDELIV `err:G01` after exactly 3 s |
+Create a gateway as above, then:
 
 **With your own SMPP client or SMS platform.** Point it at `<server IP>:<port>` with the
 gateway's `system_id` and `password`, bind as TX, RX or TRX, and send `submit_sm` with
@@ -91,26 +136,27 @@ with the TLVs `receipted_message_id`, `message_state` and, if set, `network_erro
 
 ```sh
 make bin
-./bin/fsg-loadgen -addr 127.0.0.1:20001 -system-id happy -password <password> \
+./bin/fsg-loadgen -addr 127.0.0.1:20001 -system-id vendora -password secret1 \
     -binds 4 -tps 2000 -duration 30s
 ```
 
 It prints throughput, `submit_sm_resp` latency percentiles, throttled/rejected counts,
 DLR status counts and DLR delay, and exits non-zero on unanswered submits or missing DLRs.
 
-**Change gateways live.** Edit `config/gateways.json`; the worker applies changes within
-1 s: new gateways start listening, edits apply to new binds and messages, a changed port
-moves the listener, and `"status": "disabled"` (or removing the gateway) closes the
-port and unbinds its sessions. An invalid file is rejected and the last good config
-keeps running (see `docker compose logs worker`).
-
 **Watch it.** Worker metrics at http://127.0.0.1:9108/metrics: `fsg_submit_total`,
 `fsg_dlr_total`, `fsg_bind_total`, `fsg_sessions`, `fsg_dlr_pending`, `fsg_dlr_queued`.
+`GET /api/v1/gateways` shows each gateway's listener state (`runtime`) as the worker reports it.
 
-### Gateway file format
+### Running a worker without the control plane
 
-`defaults` apply to every gateway; a gateway overrides only the fields it sets. See
-[deploy/gateways.example.json](deploy/gateways.example.json).
+Set `FSG_GATEWAYS_FILE=/etc/fsg/gateways.json` and the worker reads gateways from
+`config/gateways.json` instead (hot-reloaded within 1 s). `make env` writes a sample
+file with three gateways ([deploy/gateways.example.json](deploy/gateways.example.json)).
+
+### Gateway settings
+
+The same settings exist in the API and in the static file. In the file, `defaults` apply
+to every gateway and a gateway overrides only the fields it sets.
 
 | Field | Meaning |
 |---|---|
@@ -147,7 +193,7 @@ full gate (25k TPS for 60 min, 50k TPS for 10 min) still needs a dedicated host:
 earlier 50k run on this shared server had one 5 s window with a ~50 ms stall, which
 GC traces ruled out as the cause.
 
-### Using the MariaDB, Redis and ClickHouse already on the host
+## Using the MariaDB, Redis and ClickHouse already on the host
 
 Point the `FSG_MARIADB_*`, `FSG_REDIS_*` and `FSG_CLICKHOUSE_*` variables in `.env` at the
 existing servers, create the `fsg` database and users there, and start without the profile:
@@ -174,10 +220,12 @@ python3 -m venv control/.venv && control/.venv/bin/pip install -e "control[dev]"
 make test          # Go vet + race tests, ruff + pytest, panel typecheck + build
 ```
 
+`make test` starts throwaway MariaDB (127.0.0.1:13399) and Redis (127.0.0.1:16399)
+containers: the control-plane API tests and the worker's Redis tests run against them.
+
 ```sh
-cd worker && go test ./...                                   # unit + integration tests
-FSG_TEST_REDIS_ADDR=127.0.0.1:16379 go test ./internal/server  # + DLR queue tests on real Redis
-cd panel  && npm run dev    # proxies /api to the control plane on :8080
+cd panel && npm run dev    # proxies /api to the control plane on :8080
+cd control && .venv/bin/alembic revision --autogenerate -m "..."   # after changing models.py
 ```
 
 The worker's integration tests drive it with an independent SMPP client

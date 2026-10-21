@@ -1,6 +1,8 @@
 // Command fsg-worker runs the SMPP listeners for every gateway assigned to
 // this worker: bind auth, submit_sm, outcome engine, TPS limits and DLRs.
-// Gateways come from FSG_GATEWAYS_FILE, polled every 500 ms so changes apply within 1 s.
+//
+// Gateways come from the control plane (FSG_CONTROL_URL), or from a static
+// file when FSG_GATEWAYS_FILE is set (polled every 500 ms).
 package main
 
 import (
@@ -22,6 +24,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/config"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/control"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/heartbeat"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/server"
@@ -60,11 +63,12 @@ func main() {
 
 	workerInfo.WithLabelValues(strconv.Itoa(int(cfg.WorkerID)), cfg.WorkerIP, version).Set(1)
 	go heartbeat.Run(ctx, rdb, heartbeat.Beat{
-		WorkerID:  cfg.WorkerID,
-		IP:        cfg.WorkerIP,
-		Version:   version,
-		PortRange: cfg.PortRange.String(),
-		StartedAt: time.Now().UTC(),
+		WorkerID:    cfg.WorkerID,
+		IP:          cfg.WorkerIP,
+		Version:     version,
+		PortRange:   cfg.PortRange.String(),
+		PortExclude: cfg.PortExclude,
+		StartedAt:   time.Now().UTC(),
 	}, 2*time.Second, log)
 
 	mgr := server.NewManager(server.Options{
@@ -77,7 +81,20 @@ func main() {
 	})
 	mgrDone := make(chan struct{})
 	go func() { mgr.Run(ctx); close(mgrDone) }()
-	go gateway.WatchFile(ctx, cfg.GatewaysFile, 500*time.Millisecond, log, func(cfgs []gateway.Config) { mgr.Apply(cfgs) })
+	if cfg.GatewaysFile != "" {
+		go gateway.WatchFile(ctx, cfg.GatewaysFile, 500*time.Millisecond, log, func(cfgs []gateway.Config) { mgr.Apply(cfgs) })
+	} else {
+		src := control.New(control.Options{
+			WorkerID:  cfg.WorkerID,
+			URL:       cfg.ControlURL,
+			Token:     cfg.InternalToken,
+			Redis:     rdb,
+			CachePath: cfg.ConfigCache,
+			PortCheck: func(port int) error { return testBind(cfg, port) },
+			Log:       log,
+		}, mgr)
+		go src.Run(ctx)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -101,7 +118,7 @@ func main() {
 		"metrics_addr", cfg.MetricsAddr,
 		"redis_addr", cfg.RedisAddr,
 		"control_url", cfg.ControlURL,
-		"gateways_file", cfg.GatewaysFile,
+		"config_source", configSource(cfg),
 	)
 
 	<-ctx.Done()
@@ -129,4 +146,24 @@ func healthcheck(addr string) int {
 		return 1
 	}
 	return 0
+}
+
+func configSource(cfg config.Config) string {
+	if cfg.GatewaysFile != "" {
+		return "file:" + cfg.GatewaysFile
+	}
+	return "control:" + cfg.ControlURL
+}
+
+// testBind is the worker's half of the port check: the port must be allowed
+// and free on this host right now.
+func testBind(cfg config.Config, port int) error {
+	if err := cfg.PortAllowed(port); err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.ListenHost, strconv.Itoa(port)))
+	if err != nil {
+		return err
+	}
+	return ln.Close()
 }

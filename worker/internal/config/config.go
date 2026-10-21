@@ -31,7 +31,8 @@ type Config struct {
 	SpillDir      string
 	SpillMaxBytes int64
 	LogLevel      slog.Level
-	GatewaysFile  string // static gateway config (until the control plane serves it)
+	GatewaysFile  string // static gateway file; empty = get gateways from the control plane
+	ConfigCache   string // last config received from the control plane
 	ListenHost    string // "" = all interfaces
 }
 
@@ -83,7 +84,8 @@ func Load() (Config, error) {
 		return c, fmt.Errorf("FSG_SPILL_MAX_BYTES: %w", err)
 	}
 
-	c.GatewaysFile = env("FSG_GATEWAYS_FILE", "/etc/fsg/gateways.json")
+	c.GatewaysFile = env("FSG_GATEWAYS_FILE", "")
+	c.ConfigCache = env("FSG_CONFIG_CACHE", "/var/lib/fsg/config-cache.json")
 	c.ListenHost = env("FSG_LISTEN_HOST", "")
 
 	if err = c.LogLevel.UnmarshalText([]byte(env("FSG_LOG_LEVEL", "info"))); err != nil {

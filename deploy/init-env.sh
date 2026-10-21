@@ -10,7 +10,7 @@ if [ ! -f config/gateways.json ]; then
     sed -i "0,/__generate__/s//$(openssl rand -hex 4)/" config/gateways.json
   done
   chmod 644 config/gateways.json # the worker container runs as a non-root user
-  echo "Wrote config/gateways.json (3 sample gateways on ports 20001-20003)"
+  echo "Wrote config/gateways.json (sample gateways, used only when FSG_GATEWAYS_FILE is set)"
 fi
 
 if [ -f .env ]; then

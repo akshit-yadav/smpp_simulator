@@ -157,19 +157,13 @@ func Parse(data []byte) ([]Config, error) {
 			return nil, fmt.Errorf("defaults: %w", err)
 		}
 	}
-	baseJSON, _ := json.Marshal(base)
 
 	var out []Config
 	ids, ports, names := map[int64]bool{}, map[int]bool{}, map[string]bool{}
 	for i, raw := range f.Gateways {
-		var c Config
-		_ = json.Unmarshal(baseJSON, &c) // deep copy of the defaults
-		c.Password = base.Password
-		if err := json.Unmarshal(raw, &c); err != nil {
+		c, err := Decode(base, raw)
+		if err != nil {
 			return nil, fmt.Errorf("gateways[%d]: %w", i, err)
-		}
-		if err := c.Validate(); err != nil {
-			return nil, err
 		}
 		if ids[c.ID] || ports[c.Port] || names[c.Name] {
 			return nil, fmt.Errorf("gateway %d (%s): duplicate id, port or name", c.ID, c.Name)
@@ -178,4 +172,15 @@ func Parse(data []byte) ([]Config, error) {
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+// Decode unmarshals one gateway on top of a deep copy of base and validates it.
+func Decode(base Config, raw json.RawMessage) (Config, error) {
+	var c Config
+	baseJSON, _ := json.Marshal(base)
+	_ = json.Unmarshal(baseJSON, &c)
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return c, err
+	}
+	return c, c.Validate()
 }

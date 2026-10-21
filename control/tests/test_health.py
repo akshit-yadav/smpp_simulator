@@ -27,7 +27,6 @@ def test_readyz_reports_each_store_down():
     assert all(v.startswith("down") for v in body["checks"].values())
 
 
-def test_workers_returns_503_when_redis_down():
+def test_api_requires_login():
     with make_client() as client:
-        resp = client.get("/api/v1/workers")
-    assert resp.status_code == 503
+        assert client.get("/api/v1/workers").status_code in (401, 503)

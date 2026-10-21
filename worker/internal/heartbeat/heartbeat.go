@@ -20,12 +20,13 @@ var redisUp = promauto.NewGauge(prometheus.GaugeOpts{
 })
 
 type Beat struct {
-	WorkerID  uint8     `json:"worker_id"`
-	IP        string    `json:"ip"`
-	Version   string    `json:"version"`
-	PortRange string    `json:"port_range"`
-	StartedAt time.Time `json:"started_at"`
-	TS        time.Time `json:"ts"`
+	WorkerID    uint8     `json:"worker_id"`
+	IP          string    `json:"ip"`
+	Version     string    `json:"version"`
+	PortRange   string    `json:"port_range"`
+	PortExclude []int     `json:"port_exclude"`
+	StartedAt   time.Time `json:"started_at"`
+	TS          time.Time `json:"ts"`
 }
 
 // Key is the Redis key holding a worker's latest heartbeat.

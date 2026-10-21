@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     internal_token: SecretStr | None = None
     admin_username: str = "admin"
     admin_password: SecretStr | None = None
+    session_ttl_hours: int = 12
+    cookie_secure: bool = False  # set true when the panel is served over HTTPS
+    login_max_failures: int = 5
+    lockout_minutes: int = 5
+    port_check_timeout_s: float = 3.0
 
     mariadb_host: str = "127.0.0.1"
     mariadb_port: int = 3306

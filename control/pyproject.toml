@@ -16,6 +16,9 @@ dependencies = [
     "alembic>=1.14,<2",
     "redis>=5.2,<7",
     "httpx>=0.27,<1",
+    "argon2-cffi>=23.1,<26",
+    "pyotp>=2.9,<3",
+    "cryptography>=43,<50",
 ]
 
 [project.optional-dependencies]
@@ -36,7 +39,8 @@ select = ["E", "F", "I", "B", "UP", "S"]
 ignore = ["S104"]  # binding 0.0.0.0 is configurable on purpose
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+"tests/**" = ["S101", "S105", "S106", "E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:fastapi.testclient", "ignore:Using `httpx`"]

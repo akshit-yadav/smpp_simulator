@@ -72,6 +72,7 @@ type Manager struct {
 
 	mu       sync.Mutex // serialises Apply and shutdown
 	gateways map[int64]*Gateway
+	status   map[int64]GatewayStatus
 	byID     atomic.Pointer[map[int64]*Gateway] // lock-free snapshot for the hot path
 }
 
@@ -83,6 +84,7 @@ func NewManager(opt Options) *Manager {
 		ids:      msgid.New(opt.WorkerID),
 		wheel:    timewheel.New[*dlrJob](wheelTick, time.Now()),
 		gateways: map[int64]*Gateway{},
+		status:   map[int64]GatewayStatus{},
 	}
 	m.byID.Store(&map[int64]*Gateway{})
 	m.queue = newDLRQueue(opt.Redis, opt.Log)
@@ -119,6 +121,7 @@ func (m *Manager) Apply(cfgs []gateway.Config) []ApplyResult {
 			results = append(results, ApplyResult{ID: id, Action: "removed"})
 		}
 	}
+	m.updateStatus(cfgs, results)
 	for _, r := range results {
 		if r.Err != nil {
 			m.log.Error("gateway apply failed", "gateway_id", r.ID, "action", r.Action, "err", r.Err)
@@ -280,6 +283,63 @@ func (m *Manager) drainQueues() {
 			m.dispatch(j)
 		}
 	}
+}
+
+// GatewayStatus is one gateway's listener state, reported to the control plane.
+type GatewayStatus struct {
+	State string    `json:"state"` // listening | stopped | error
+	Port  int       `json:"port"`
+	Error string    `json:"error,omitempty"`
+	Since time.Time `json:"since"`
+}
+
+func (m *Manager) updateStatus(cfgs []gateway.Config, results []ApplyResult) {
+	errs := map[int64]error{}
+	for _, r := range results {
+		if r.Err != nil {
+			errs[r.ID] = r.Err
+		}
+	}
+	next := map[int64]GatewayStatus{}
+	for _, c := range cfgs {
+		st := GatewayStatus{State: "stopped", Port: c.Port}
+		switch {
+		case errs[c.ID] != nil:
+			st.State, st.Error = "error", errs[c.ID].Error()
+		case m.gateways[c.ID] != nil:
+			st.State, st.Port = "listening", m.gateways[c.ID].config().Port
+		}
+		if prev, ok := m.status[c.ID]; ok && prev.State == st.State && prev.Port == st.Port && prev.Error == st.Error {
+			st.Since = prev.Since
+		} else {
+			st.Since = time.Now().UTC()
+		}
+		next[c.ID] = st
+	}
+	m.status = next
+}
+
+// Status returns every configured gateway's listener state.
+func (m *Manager) Status() map[int64]GatewayStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[int64]GatewayStatus, len(m.status))
+	for id, st := range m.status {
+		out[id] = st
+	}
+	return out
+}
+
+// HasErrors reports whether any gateway failed to start (e.g. port in use).
+func (m *Manager) HasErrors() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, st := range m.status {
+		if st.State == "error" {
+			return true
+		}
+	}
+	return false
 }
 
 // PortError is returned when a gateway's port fails validation.
