@@ -13,7 +13,7 @@ import {
 } from "../api/queries";
 import type { TrafficRow } from "../api/types";
 import { BarChart, LineChart } from "../components/charts";
-import { Badge, Card, Empty, ErrorBox, Loading, PageHead, Segmented, Tabs, Term } from "../components/ui";
+import { Badge, Card, Check, Empty, ErrorBox, Loading, PageHead, Segmented, Tabs, Term } from "../components/ui";
 import { fmtMs, fmtNum, fmtTime, hex } from "../lib/format";
 
 type Preset = "1h" | "6h" | "24h" | "7d" | "30d";
@@ -35,10 +35,16 @@ export default function Reports() {
   const [preset, setPreset] = useState<Preset>("24h");
   const [anchor, setAnchor] = useState(() => Date.now()); // fixed until Refresh, so queries stay cached
   const [gatewayId, setGatewayId] = useState<number | undefined>(undefined);
+  const [withSimulator, setWithSimulator] = useState(false);
 
   const query: ReportQuery = useMemo(
-    () => ({ from: new Date(anchor - PRESET_MS[preset]).toISOString(), to: new Date(anchor).toISOString(), gateway_id: gatewayId }),
-    [anchor, preset, gatewayId],
+    () => ({
+      from: new Date(anchor - PRESET_MS[preset]).toISOString(),
+      to: new Date(anchor).toISOString(),
+      gateway_id: gatewayId,
+      include_simulator: withSimulator || undefined,
+    }),
+    [anchor, preset, gatewayId, withSimulator],
   );
   const csvDisabled = tab === "mix" && gatewayId === undefined;
 
@@ -75,6 +81,9 @@ export default function Reports() {
               </option>
             ))}
           </select>
+          <Check checked={withSimulator} onChange={setWithSimulator}>
+            <Term info="includeSimulator">Include simulator tests</Term>
+          </Check>
           <button type="button" className="btn" onClick={() => setAnchor(Date.now())}>
             Refresh
           </button>

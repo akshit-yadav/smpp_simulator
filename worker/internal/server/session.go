@@ -14,6 +14,7 @@ import (
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/msgid"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/outcome"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/ratelimit"
+	"github.com/akshit-yadav/smpp_simulator/worker/pkg/simulator"
 	"github.com/akshit-yadav/smpp_simulator/worker/pkg/smpp/pdu"
 )
 
@@ -43,11 +44,14 @@ type Session struct {
 
 	bound    atomic.Bool
 	bindType string
-	systemID string
-	boundAt  time.Time
-	submits  atomic.Uint64
-	bucket   *ratelimit.Bucket // per-bind TPS
-	lastCfg  *runtimeConfig
+	// simulator: bound by PSG's own client simulator (address_range marker);
+	// its events are tagged so reports can leave them out.
+	simulator bool
+	systemID  string
+	boundAt   time.Time
+	submits   atomic.Uint64
+	bucket    *ratelimit.Bucket // per-bind TPS
+	lastCfg   *runtimeConfig
 
 	seq     atomic.Uint32
 	dlrCh   chan *dlrJob
@@ -164,6 +168,7 @@ func (s *Session) handleBind(p pdu.Packet) bool {
 	rc := s.gw.config()
 	bt := bindTypeOf(p.CommandID)
 	b, err := pdu.DecodeBind(p.Body)
+	s.simulator = b.AddressRange == simulator.AddressRange
 
 	status := pdu.ESME_ROK
 	var fe *pdu.FieldError
@@ -273,7 +278,7 @@ func (s *Session) handleSubmit(p pdu.Packet) {
 	s.respond(pdu.SubmitSMResp, pdu.ESME_ROK, p.Sequence, pdu.MessageIDResp{MessageID: hexID}.Append(nil))
 	s.gw.stats.Accepted.Add(1)
 	s.recordSubmit(&sm, events.SubmitAccepted, pdu.ESME_ROK, o, id)
-	s.m.scheduleDLR(rc, &sm, id, o, now)
+	s.m.scheduleDLR(rc, &sm, id, o, now, s.simulator)
 }
 
 // recordSubmit emits a submit_events row; sm is nil if the PDU did not decode.
@@ -283,7 +288,7 @@ func (s *Session) recordSubmit(sm *pdu.SM, result events.SubmitResult, status pd
 	}
 	e := events.Submit{
 		TS: time.Now(), GatewayID: s.gw.id, SessionID: s.id, SystemID: s.systemID,
-		MessageID: id, Result: result, Status: uint32(status),
+		MessageID: id, Result: result, Status: uint32(status), Simulator: s.simulator,
 	}
 	if sm != nil {
 		e.Src, e.Dst = sm.SourceAddr, sm.DestAddr
@@ -299,7 +304,7 @@ func (s *Session) recordSubmit(sm *pdu.SM, result events.SubmitResult, status pd
 func (s *Session) recordSession(ev events.SessionEvent, bindType, systemID string, status pdu.Status) {
 	s.m.events.Session(events.Session{
 		TS: time.Now(), GatewayID: s.gw.id, SessionID: s.id, Event: ev, BindType: bindType,
-		SystemID: systemID, Remote: s.remote, Status: uint32(status), Submits: s.submits.Load(),
+		SystemID: systemID, Remote: s.remote, Status: uint32(status), Submits: s.submits.Load(), Simulator: s.simulator,
 	})
 }
 

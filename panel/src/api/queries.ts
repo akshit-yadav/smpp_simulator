@@ -18,6 +18,10 @@ import type {
   DlrError,
   Gateway,
   LicenceSummary,
+  TestError,
+  Tester,
+  TestRunOut,
+  TestSpec,
   Live,
   Me,
   DlrRule,
@@ -226,12 +230,13 @@ export interface ReportQuery {
   from: string;
   to: string;
   gateway_id?: number;
+  include_simulator?: boolean; // traffic from psg-tester; left out unless true
 }
 
 /** URL of a report, for fetching or (with format=csv) downloading. */
-export const reportUrl = (path: string, params: Record<string, string | number | undefined>) => `/api/v1${path}${qs(params)}`;
+export const reportUrl = (path: string, params: Record<string, string | number | boolean | undefined>) => `/api/v1${path}${qs(params)}`;
 
-const report = <T,>(path: string, params: Record<string, string | number | undefined>, enabled = true) =>
+const report = <T,>(path: string, params: Record<string, string | number | boolean | undefined>, enabled = true) =>
   useQuery({
     queryKey: ["reports", path, params],
     queryFn: () => get<T>(`${path}${qs(params)}`),
@@ -284,5 +289,36 @@ export function useLicenceAction() {
     upload: useMutation({ mutationFn: (text: string) => put<LicenceSummary>("/licence", { licence: text }), onSuccess: done }),
     remove: useMutation({ mutationFn: () => api<LicenceSummary>("DELETE", "/licence"), onSuccess: done }),
     keep: useMutation({ mutationFn: (ids: number[]) => put<LicenceSummary>("/licence/keep", { gateway_ids: ids }), onSuccess: done }),
+  };
+}
+
+// ---- SMPP client simulator -----------------------------------------------------------
+
+export const useTesters = () => useQuery({ queryKey: ["testers"], queryFn: () => get<Tester[]>("/testers"), refetchInterval: 5000 });
+
+export const useTests = () => useQuery({ queryKey: ["tests"], queryFn: () => get<TestRunOut[]>("/tests"), refetchInterval: 5000 });
+
+export const useTest = (id: number | null) =>
+  useQuery({
+    queryKey: ["tests", id],
+    queryFn: () => get<TestRunOut>(`/tests/${id}`),
+    enabled: id !== null,
+    refetchInterval: (q) => (q.state.data && ["queued", "running"].includes(q.state.data.status) ? 1000 : false),
+  });
+
+export const useTestErrors = (id: number, enabled: boolean) =>
+  useQuery({
+    queryKey: ["tests", id, "errors"],
+    queryFn: () => get<{ errors: TestError[]; expires_in_s: number | null }>(`/tests/${id}/errors`),
+    enabled,
+  });
+
+export function useTestActions() {
+  const qc = useQueryClient();
+  const refresh = () => qc.invalidateQueries({ queryKey: ["tests"] });
+  return {
+    start: useMutation({ mutationFn: (b: TestSpec) => post<TestRunOut>("/tests", b), onSuccess: refresh }),
+    stop: useMutation({ mutationFn: (id: number) => post<TestRunOut>(`/tests/${id}/stop`), onSuccess: refresh }),
+    remove: useMutation({ mutationFn: (id: number) => del(`/tests/${id}`), onSuccess: refresh }),
   };
 }

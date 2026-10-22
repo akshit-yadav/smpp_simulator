@@ -54,6 +54,23 @@ services:
       retries: 3
       start_period: 10s
 
+  # SMPP client simulator (M10): runs the panel's gateway tests. Idle unless a
+  # test runs. The same image can run on another machine with PSG_CONTROL_URL
+  # pointing here (see the README).
+  tester:
+    image: psg-tester:${PSG_VERSION:-dev}
+    build:
+      context: .
+      dockerfile: loadgen/Dockerfile
+      args:
+        VERSION: ${PSG_VERSION:-dev}
+    network_mode: host
+    env_file: .env
+    restart: unless-stopped
+    mem_limit: 512m
+    ulimits:
+      nofile: { soft: 1048576, hard: 1048576 }
+
   # ---- bundled profile: lab-only stores -------------------------------------
 
   mariadb:

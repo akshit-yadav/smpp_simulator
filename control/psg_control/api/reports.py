@@ -23,6 +23,9 @@ from psg_control.models import DLRRule, Gateway
 router = APIRouter(tags=["reports"])
 
 Format = Literal["json", "csv"]
+IncludeSimulator = Annotated[
+    bool, Query(description="Include traffic from PSG's own client simulator (psg-tester)")
+]
 GatewayIDs = Annotated[list[int] | None, Query(description="Repeat to filter by several")]
 
 STEPS_S = (60, 300, 900, 3600, 6 * 3600, 86400)
@@ -49,6 +52,11 @@ def time_range(start: datetime | None, end: datetime | None) -> tuple[datetime, 
 
 def _utc(t: datetime) -> datetime:
     return t.replace(tzinfo=UTC) if t.tzinfo is None else t.astimezone(UTC)
+
+
+def simulator_filter(include: bool, column: str = "simulator") -> str:
+    """Simulator traffic is left out of reports unless asked for."""
+    return "" if include else f"AND {column} = 0"
 
 
 def gateway_filter(ids: list[int] | None, params: dict) -> str:
@@ -119,6 +127,7 @@ def traffic(
     end: Annotated[datetime | None, Query(alias="to")] = None,
     gateway_id: GatewayIDs = None,
     step: Annotated[int | None, Query(ge=60, le=86400)] = None,
+    include_simulator: IncludeSimulator = False,
     format: Format = "json",
 ):
     """submit_sm by result and DLRs by result, per gateway and time step.
@@ -128,7 +137,7 @@ def traffic(
     params = {"from": start, "to": end, "step": step}
     gw = gateway_filter(gateway_id, params)
     bucket = "toUnixTimestamp(toStartOfInterval(minute, toIntervalSecond({step:UInt32}))) * 1000"
-    where = f"{MINUTES} {gw}"
+    where = f"{MINUTES} {gw} {simulator_filter(include_simulator)}"
     submits = run(
         stores.clickhouse,
         f"SELECT {bucket} AS t, gateway_id, "
@@ -166,6 +175,7 @@ def mo_traffic(
     end: Annotated[datetime | None, Query(alias="to")] = None,
     gateway_id: GatewayIDs = None,
     step: Annotated[int | None, Query(ge=60, le=86400)] = None,
+    include_simulator: IncludeSimulator = False,
     format: Format = "json",
 ):
     """MO deliver_sm by result, per gateway and time step. Each part of a long
@@ -180,7 +190,8 @@ def mo_traffic(
         " AS t, gateway_id, "
         + ", ".join(f"sumIf(messages, result = '{r}') AS {r}" for r in MO_RESULTS)
         + ", sumIf(messages, test = 1) AS test"
-        + f" FROM mo_minute WHERE {MINUTES} {gw} GROUP BY t, gateway_id ORDER BY t, gateway_id",
+        + f" FROM mo_minute WHERE {MINUTES} {gw} {simulator_filter(include_simulator)}"
+        + " GROUP BY t, gateway_id ORDER BY t, gateway_id",
         params,
     )
     names = gateway_names(db)
@@ -199,6 +210,7 @@ def outcomes(
     gateway_id: int,
     start: Annotated[datetime | None, Query(alias="from")] = None,
     end: Annotated[datetime | None, Query(alias="to")] = None,
+    include_simulator: IncludeSimulator = False,
     format: Format = "json",
 ):
     """One gateway's DLR rule mix: the share each entry actually got against
@@ -212,7 +224,7 @@ def outcomes(
         stores.clickhouse,
         "SELECT outcome, toString(result) AS result, command_status, sum(messages) AS messages "
         "FROM submit_minute WHERE gateway_id = {gw:UInt32} "
-        f"AND {MINUTES} "
+        f"AND {MINUTES} {simulator_filter(include_simulator)} "
         "GROUP BY outcome, result, command_status",
         {"gw": gateway_id, "from": start, "to": end},
     )
@@ -289,6 +301,7 @@ def dlr_delay(
     start: Annotated[datetime | None, Query(alias="from")] = None,
     end: Annotated[datetime | None, Query(alias="to")] = None,
     gateway_id: GatewayIDs = None,
+    include_simulator: IncludeSimulator = False,
     format: Format = "json",
 ):
     """Acknowledged final DLRs (intermediate ENROUTE/ACCEPTD receipts left out)
@@ -302,7 +315,7 @@ def dlr_delay(
         "SELECT delay_bucket, sum(dlrs) AS dlrs, sum(delay_ms_sum) AS delay_ms_sum "
         "FROM dlr_minute WHERE result = 'acknowledged' "
         "AND dlr_status NOT IN ('ENROUTE', 'ACCEPTD') "
-        f"AND {MINUTES} {gw} "
+        f"AND {MINUTES} {gw} {simulator_filter(include_simulator)} "
         "GROUP BY delay_bucket",
         params,
     )
@@ -327,6 +340,7 @@ def binds(
     end: Annotated[datetime | None, Query(alias="to")] = None,
     gateway_id: GatewayIDs = None,
     limit: Annotated[int, Query(ge=1, le=10000)] = 1000,
+    include_simulator: IncludeSimulator = False,
     format: Format = "json",
 ):
     """Binds, failed binds, closes and admin kills, newest first (3 days kept)."""
@@ -338,7 +352,8 @@ def binds(
         "SELECT toUnixTimestamp64Milli(ts) AS ts, gateway_id, worker_id, session_id, "
         "toString(event) AS event, bind_type, system_id, remote, status, submits "
         "FROM session_events AS e WHERE e.ts >= {from:DateTime64(3)} AND e.ts < {to:DateTime64(3)} "
-        f"{gw} ORDER BY e.ts DESC LIMIT {{limit:UInt32}}",
+        f"{gw} {simulator_filter(include_simulator, 'e.simulator')} "
+        "ORDER BY e.ts DESC LIMIT {limit:UInt32}",
         params,
     )
     names = gateway_names(db)
@@ -370,18 +385,19 @@ def id_candidates(text: str) -> list[int]:
 SUBMIT_COLUMNS = (
     "toUnixTimestamp64Milli(ts) AS ts, worker_id, gateway_id, session_id, system_id, "
     "toString(message_id) AS message_id, source_addr, dest_addr, toString(result) AS result, "
-    "command_status, outcome, dlr_status, dlr_error, registered_delivery, data_coding, sm_length"
+    "command_status, outcome, dlr_status, dlr_error, registered_delivery, data_coding, sm_length, "
+    "simulator"
 )
 MO_COLUMNS = (
     "toUnixTimestamp64Milli(ts) AS ts, worker_id, gateway_id, session_id, "
     "toString(message_id) AS message_id, source_addr, dest_addr, toString(result) AS result, "
-    "test, encoding, part, parts, sm_length, text, attempt, resp_ms, command_status"
+    "test, encoding, part, parts, sm_length, text, attempt, resp_ms, command_status, simulator"
 )
 DLR_COLUMNS = (
     "toUnixTimestamp64Milli(ts) AS ts, worker_id, gateway_id, session_id, "
     "toString(message_id) AS message_id, source_addr, dest_addr, toString(result) AS result, "
     "dlr_status, dlr_error, attempt, toUnixTimestamp64Milli(submit_ts) AS submit_ts, "
-    "delay_ms, resp_ms, command_status"
+    "delay_ms, resp_ms, command_status, simulator"
 )
 
 

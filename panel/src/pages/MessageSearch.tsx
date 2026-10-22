@@ -107,7 +107,15 @@ export default function MessageSearch() {
                   <tbody>
                     {rows.map((row) => (
                       <tr key={`${row.kind}:${row.e.ts}:${row.e.message_id}:${row.e.result}`}>
-                        <td className="nowrap">{fmtTime(row.e.ts)}</td>
+                        <td className="nowrap">
+                          {fmtTime(row.e.ts)}
+                          {row.e.simulator ? (
+                            <>
+                              {" "}
+                              <Badge plain>simulator</Badge>
+                            </>
+                          ) : null}
+                        </td>
                         <td className="nowrap">
                           {row.kind === "submit" ? (
                             <>

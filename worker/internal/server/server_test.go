@@ -23,6 +23,7 @@ import (
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/licensing"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/outcome"
 	"github.com/akshit-yadav/smpp_simulator/worker/pkg/licence"
+	"github.com/akshit-yadav/smpp_simulator/worker/pkg/simulator"
 	"github.com/akshit-yadav/smpp_simulator/worker/pkg/smpp/pdu"
 )
 
@@ -880,5 +881,61 @@ func TestLicenceLimits(t *testing.T) {
 	s := m.StatsSnapshot()[1]
 	if throttled < 35 || s.LicenceThrottled != uint64(throttled) || s.Throttled != 0 || s.Accepted != uint64(60-throttled) {
 		t.Fatalf("throttled %d, stats %+v", throttled, s)
+	}
+}
+
+func TestSimulatorTrafficIsTagged(t *testing.T) {
+	db := "psg_server_simulator_test"
+	chURL := chtest.DB(t, db)
+	rec, err := events.New(events.Options{WorkerID: 1, URL: chURL, Database: db, SpillDir: t.TempDir(), SpillMaxBytes: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recCtx, stopRec := context.WithCancel(context.Background())
+	recDone := make(chan struct{})
+	go func() { rec.Run(recCtx); close(recDone) }()
+
+	c := testConfig(t)
+	c.DLR.Timing = gateway.TimingImmediate
+	startManagerWith(t, Options{Events: rec}, c)
+
+	// The simulator's bind carries the address_range marker.
+	conn, r := rawConn(t, c)
+	conn.Write(pdu.Encode(pdu.BindTransceiver, 0, 1, pdu.Bind{
+		SystemID: c.SystemID, Password: string(c.Password), InterfaceVersion: 0x34, AddressRange: simulator.AddressRange,
+	}.Append(nil)))
+	if p, _ := r.Read(); p.Status != pdu.ESME_ROK {
+		t.Fatalf("bind: %v", p.Status)
+	}
+	conn.Write(pdu.Encode(pdu.SubmitSM, 0, 2, pdu.SM{SourceAddr: "SIM", DestAddr: "919800000001", RegisteredDelivery: 1, ShortMessage: []byte("hi")}.Append(nil)))
+	for got := 0; got < 2; got++ { // submit_sm_resp and the DLR, in either order
+		p, err := r.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.CommandID == pdu.DeliverSM {
+			conn.Write(pdu.Encode(pdu.DeliverSMResp, 0, p.Sequence, []byte{0}))
+		}
+	}
+	// An ordinary client on the same gateway is not tagged.
+	cl := mustBind(t, c, "trx")
+	cl.submit(t, newSubmit(t, "x", 0))
+	waitResp(t, cl)
+	time.Sleep(200 * time.Millisecond) // let the DLR acknowledgement be recorded
+	_ = cl.sess.Close()
+	conn.Close()
+	time.Sleep(200 * time.Millisecond)
+	stopRec()
+	<-recDone
+
+	for q, want := range map[string]string{
+		"SELECT groupArray(simulator) FROM (SELECT simulator FROM submit_events ORDER BY simulator)":      "[0,1]",
+		"SELECT simulator, result FROM dlr_events":                                                        "1\tacknowledged",
+		"SELECT sum(messages) FROM submit_minute WHERE simulator = 1":                                     "1",
+		"SELECT countIf(simulator = 1), countIf(simulator = 0) FROM session_events WHERE event = 'bound'": "1\t1",
+	} {
+		if got := chtest.Query(t, chURL, db, q); got != want {
+			t.Errorf("%s\n got %q\nwant %q", q, got, want)
+		}
 	}
 }

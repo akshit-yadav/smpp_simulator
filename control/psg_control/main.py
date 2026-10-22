@@ -24,6 +24,7 @@ from psg_control.api import (
     live,
     mo,
     reports,
+    tests,
     workers,
 )
 from psg_control.auth import bootstrap_admin
@@ -96,6 +97,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
         licence,
         mo,
         reports,
+        tests,
         dlr_rules,
         catalog,
         defaults,
@@ -103,6 +105,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
     ):
         app.include_router(module.router, prefix="/api/v1")
     app.include_router(internal.router)
+    app.include_router(tests.agent_router)
 
     # Mounted last so API routes take precedence.
     if settings.panel_dir and Path(settings.panel_dir, "index.html").is_file():

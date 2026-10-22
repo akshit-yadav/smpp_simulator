@@ -18,6 +18,7 @@ import Login from "./pages/Login";
 import MessageSearch from "./pages/MessageSearch";
 import Reports from "./pages/Reports";
 import SettingsPage from "./pages/Settings";
+import TesterPage from "./pages/Tester";
 import Workers from "./pages/Workers";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -64,6 +65,8 @@ export default function App() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="reports" element={<Reports />} />
         <Route path="search" element={<MessageSearch />} />
+        <Route path="tester" element={<TesterPage />} />
+        <Route path="tester/:id" element={<TesterPage />} />
         <Route path="licence" element={<Licence />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

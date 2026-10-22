@@ -19,6 +19,7 @@ behaviour, MO traffic and TPS limit.
 | M7 MO generator: rate or burst, schedule, sources/destinations, weighted templates, GSM7/UCS2, long messages, queue or drop, Send test MO, MO report | ✅ Done |
 | M8 Licensing: signed licences (Ed25519), machine fingerprints, gateway limit with suspension, global TPS cap shared by workers, expiry and clock checks, Licence screen, `licgen` | ✅ Done |
 | M9 Hardening and acceptance: resilience test, `host-tune.sh`, [acceptance checklist](docs/acceptance.md), install/upgrade/runbook | ✅ Done (the 60-minute benchmark gate needs a dedicated host) |
+| M10 SMPP client simulator: panel-driven `psg-tester` agent (local or on another machine), sessions, TPS, duration, network and response delays, live progress, results, 24 h error log; simulator traffic tagged and left out of reports | ✅ Done |
 | Next phase (deferred from M6): `submit_multi`, `data_sm`, `query_sm`, `cancel_sm`, `replace_sm`; conditional rules; live overrides; response latency | 🕓 Deferred |
 
 See [docs/build-prompt.md](docs/build-prompt.md) for the full scope.
@@ -85,6 +86,7 @@ Open http://127.0.0.1:8080/ and sign in as `admin` with the `PSG_ADMIN_PASSWORD`
 | Settings & audit | Change password, turn on TOTP (QR code), audit log of every change |
 | Reports | Traffic (submit_sm and DLRs by result, per gateway), DLR rule mix actual vs configured, DLR delay distribution, throttling, MO traffic, bind history; 1 h to 30 days; CSV export |
 | Message search | A message's submit_sm, DLR and MO events by message ID (hex or decimal), or recent traffic for a number |
+| Gateway tester | Stress-test listening gateways with PSG's SMPP client simulator: pick gateways, sessions, TPS, duration, network and response delays; live chart, result per gateway and session, error log, history |
 | Licence | Status and limits, upload/replace/remove, worker fingerprints and match, **Request licence** export, which gateways stay active when over the limit. A banner on every page warns of expiry, a wrong machine or suspended gateways |
 
 ## Manage gateways (REST API)
@@ -250,6 +252,51 @@ the same 1,000-PDU window, retries and queue as DLRs, does not count against the
 search). API: `GET/PUT /api/v1/gateways/{id}/mo`, `POST …/mo/start`, `…/mo/stop`,
 `…/mo/test`.
 
+## Gateway tester (SMPP client simulator)
+
+**Gateway tester** in the panel runs PSG's own SMPP client against listening gateways:
+pick the gateways, sessions per gateway (TRX, or TX + RX), total TPS, duration, ramp-up,
+window, DLR request (none, final, or with intermediate DLRs), text, and two kinds of delay:
+
+- **Network delay**, added to every PDU each way, fixed or random (like a distant link)
+- **Client response delay**, before each `deliver_sm_resp` (like a slow platform; it exercises
+  PSG's DLR window, timeouts and retries)
+
+The run shows live sent/accepted/error rates and p50/p99 response times. The result has
+totals, per gateway and per session, response-time percentiles, DLR counts, error
+statuses and the bind round trip (the real network, before added delays). Timeline CSV
+and result JSON can be downloaded. Results are kept until deleted.
+
+- **Logs.** The tester writes a per-PDU trace to its temporary directory only while the
+  run lasts, reads it for the per-session figures and deletes it when the result is
+  ready; no per-PDU data leaves the tester. Errors (rejected or throttled submit_sm,
+  timeouts, disconnects, unmatched or missing DLRs; up to 10,000) are kept in Redis for 24 h
+  if **Keep errors 24 h** is on, else deleted when the result arrives.
+- **Reports.** The tester marks its binds (`address_range` `PSG-TESTER`), and the worker tags
+  their events `simulator = 1`. Reports leave them out unless **Include simulator tests** is
+  ticked; Message search shows them with a *simulator* badge. Test traffic counts against the
+  licence TPS cap like any client.
+- **Safety.** The `tester` container is memory-limited (512 MB), stops a run when the host has
+  under 500 MB available, and runs one test at a time.
+
+**On another machine.** For full-capacity tests, run the tester where it does not share CPU
+with PSG. It only makes outbound HTTP calls to the control plane, so the other machine needs no
+open ports:
+
+```sh
+docker run -d --name psg-tester --network host --restart unless-stopped \
+  -e PSG_CONTROL_URL=http://<psg-host>:8080 -e PSG_TESTER_TOKEN=<from PSG's .env> \
+  -e PSG_TESTER_ID=2 -e PSG_TESTER_NAME=lab-2 psg-tester:dev
+```
+
+The control plane must then listen beyond localhost (`PSG_HTTP_HOST`, or a reverse proxy),
+and the tester must reach the worker's SMPP ports. Allow only the tester's IP, and use TLS
+or a VPN across the internet: test jobs carry gateway passwords. `PSG_TESTER_TOKEN` only
+opens the tester API, not worker configuration.
+
+**Without the panel:** `bin/psg-loadgen` runs the same engine from the command line
+(`-net-delay 20-50`, `-resp-delay 200`, `-simulator`).
+
 ## Licensing
 
 Without a valid licence the **free tier** applies: **10 gateways** and **1,000 TPS** in total
@@ -377,7 +424,8 @@ schema.
 MOs), and, at HWPL only, the `licgen` private key.
 
 **Resilience test:** `deploy/resilience-test.sh` starts an isolated stack and stops each
-store under load (see [docs/acceptance.md](docs/acceptance.md)).
+store under load (see [docs/acceptance.md](docs/acceptance.md)). `deploy/simulator-test.sh`
+does the same for the gateway tester.
 
 ## Configuration
 

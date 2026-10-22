@@ -45,7 +45,7 @@ def window(base):
 def test_schema_is_applied_once(ch):
     assert migrate(ch) == []
     names = ch.execute("SELECT name FROM psg_schema ORDER BY version").split()
-    assert names == ["001_events.sql", "002_mo.sql"]
+    assert names == ["001_events.sql", "002_mo.sql", "003_simulator.sql"]
 
 
 @needs_clickhouse
@@ -344,3 +344,34 @@ def test_reports_unavailable_without_clickhouse(admin):
 def test_reports_need_login(client):
     assert client.get("/api/v1/reports/traffic").status_code == 401
     assert client.get("/api/v1/messages", params={"destination": "1"}).status_code == 401
+
+
+@needs_clickhouse
+def test_simulator_traffic_left_out_unless_asked(admin, ch, base):
+    insert(
+        ch,
+        "submit_events",
+        [
+            {"ts": at(base, 1), "gateway_id": 1, "result": "accepted"},
+            {"ts": at(base, 2), "gateway_id": 1, "result": "accepted", "simulator": 1},
+            {
+                "ts": at(base, 3),
+                "gateway_id": 1,
+                "result": "accepted",
+                "simulator": 1,
+                "dest_addr": "919811112222",
+            },
+        ],
+    )
+    insert(
+        ch,
+        "session_events",
+        [{"ts": at(base, 1), "gateway_id": 1, "event": "bound", "simulator": 1}],
+    )
+    url = "/api/v1/reports/traffic"
+    assert sum(r["accepted"] for r in admin.get(url, params=window(base)).json()["rows"]) == 1
+    all_rows = admin.get(url, params=window(base) | {"include_simulator": True}).json()["rows"]
+    assert sum(r["accepted"] for r in all_rows) == 3
+    assert admin.get("/api/v1/reports/binds", params=window(base)).json()["rows"] == []
+    found = admin.get("/api/v1/messages", params={"destination": "919811112222"}).json()
+    assert found["submits"][0]["simulator"] == 1  # search shows it, flagged

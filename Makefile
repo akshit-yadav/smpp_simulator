@@ -49,9 +49,10 @@ test-worker:
 	cd worker && go vet ./... && PSG_TEST_REDIS_ADDR=$(TEST_REDIS_ADDR) \
 	  PSG_TEST_CLICKHOUSE_URL=$(TEST_CLICKHOUSE_URL) go test -race ./...
 
-bin: ## Build psg-worker and psg-loadgen into ./bin (needs Go)
+bin: ## Build psg-worker, psg-loadgen and psg-tester into ./bin (needs Go)
 	cd worker && go build -o ../bin/psg-worker ./cmd/psg-worker
 	cd loadgen && GOWORK=off go build -o ../bin/psg-loadgen ./cmd/psg-loadgen
+	cd loadgen && GOWORK=off go build -o ../bin/psg-tester ./cmd/psg-tester
 
 # make bench GW=127.0.0.1:20001 SYS=happy PW=<password> TPS=25000 DUR=60s
 bench: bin ## Run psg-loadgen against a gateway

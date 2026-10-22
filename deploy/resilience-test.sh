@@ -80,6 +80,9 @@ services:
       PSG_REDIS_PORT: "16380"
       PSG_CLICKHOUSE_HTTP_PORT: "18124"
     mem_limit: 512m
+  tester:
+    environment:
+      PSG_CONTROL_URL: http://127.0.0.1:18090
   mariadb:
     mem_limit: 768m
   redis:

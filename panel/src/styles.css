@@ -1032,3 +1032,6 @@ th .legend {
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 6px 16px;
 }
+tr.selected td {
+  background: var(--accent-soft);
+}

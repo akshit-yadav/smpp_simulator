@@ -440,3 +440,47 @@ class MOTestIn(Strict):
     destination: Address
     text: str = Field(min_length=1, max_length=1000)
     encoding: Literal["gsm7", "ucs2"] = "gsm7"
+
+
+# ---- SMPP client simulator (M10) ------------------------------------------------------
+
+DelayMs = Annotated[int, Field(ge=0, le=10_000)]
+
+
+class DelayIn(Strict):
+    """Off (0/0), fixed (min = max) or random between min and max, in ms."""
+
+    min_ms: DelayMs = 0
+    max_ms: DelayMs = 0
+
+    @model_validator(mode="after")
+    def check_range(self):
+        if self.min_ms > self.max_ms:
+            raise ValueError("min_ms must be <= max_ms")
+        return self
+
+
+class TestIn(Strict):
+    __test__ = False  # not a pytest test class
+
+    tester_id: int | None = Field(default=None, ge=1, le=255)  # None: the only online tester
+    gateway_ids: list[int] = Field(min_length=1, max_length=20)
+    sessions: int = Field(default=4, ge=1, le=100)  # per gateway (tx_rx: this many of each)
+    bind_type: Literal["trx", "tx_rx"] = "trx"
+    tps: float = Field(gt=0, le=50_000)  # total, split over the sending sessions
+    duration_s: int = Field(ge=1, le=7200)
+    ramp_up_s: int = Field(default=0, ge=0, le=600)
+    window: int = Field(default=100, ge=1, le=1000)
+    dlr: Literal["none", "final", "intermediate"] = "final"
+    text: str = Field(default="PSG test {seq}", min_length=1, max_length=500)
+    encoding: Literal["gsm7", "ucs2"] = "gsm7"
+    net_delay: DelayIn = Field(default_factory=DelayIn)
+    resp_delay: DelayIn = Field(default_factory=DelayIn)
+    keep_errors: bool = True  # keep the error log 24 h after the run
+    trace: bool = True  # temporary per-PDU trace on the tester (per-session results)
+
+    @model_validator(mode="after")
+    def check_ramp(self):
+        if self.ramp_up_s > self.duration_s:
+            raise ValueError("ramp_up_s must be <= duration_s")
+        return self

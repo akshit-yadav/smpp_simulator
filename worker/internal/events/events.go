@@ -10,6 +10,7 @@ package events
 
 import (
 	"encoding/binary"
+	"strings"
 	"sync"
 	"time"
 )
@@ -61,6 +62,7 @@ type Submit struct {
 	RegisteredDelivery byte
 	DataCoding         byte
 	SMLength           uint16
+	Simulator          bool // from PSG's own client simulator (psg-tester)
 }
 
 // DLR is one step in a delivery receipt's life: acknowledged, retried,
@@ -79,6 +81,7 @@ type DLR struct {
 	DelayMS   uint32 // submit_sm accepted -> deliver_sm sent
 	RespMS    uint32 // deliver_sm sent -> deliver_sm_resp
 	Status    uint32 // deliver_sm_resp command_status
+	Simulator bool
 }
 
 // MO is one step in an MO deliver_sm's life. Result uses the DLR values plus
@@ -99,6 +102,7 @@ type MO struct {
 	Attempt   uint8
 	RespMS    uint32
 	Status    uint32
+	Simulator bool
 }
 
 // Session is a bind, failed bind, close or admin kill.
@@ -112,9 +116,12 @@ type Session struct {
 	Remote    string
 	Status    uint32
 	Submits   uint64
+	Simulator bool
 }
 
-// table is one ClickHouse table: its column list and a row encoder.
+// table is one ClickHouse table: its column list and a row encoder. The
+// simulator column (layout 2) is always last, so a batch spilled with layout
+// 1 is the same rows without it; see legacyColumns.
 type table[T any] struct {
 	name    string
 	columns string
@@ -124,7 +131,7 @@ type table[T any] struct {
 var submitTable = table[Submit]{
 	name: "submit_events",
 	columns: "ts, worker_id, gateway_id, session_id, system_id, message_id, source_addr, dest_addr, " +
-		"result, command_status, outcome, dlr_status, dlr_error, registered_delivery, data_coding, sm_length",
+		"result, command_status, outcome, dlr_status, dlr_error, registered_delivery, data_coding, sm_length, simulator",
 	encode: func(b []byte, worker uint8, e *Submit) []byte {
 		b = appendTime(b, e.TS)
 		b = append(b, worker)
@@ -140,14 +147,15 @@ var submitTable = table[Submit]{
 		b = appendString(b, e.DLRStatus)
 		b = appendString(b, e.DLRError)
 		b = append(b, e.RegisteredDelivery, e.DataCoding)
-		return binary.LittleEndian.AppendUint16(b, e.SMLength)
+		b = binary.LittleEndian.AppendUint16(b, e.SMLength)
+		return append(b, boolByte(e.Simulator))
 	},
 }
 
 var dlrTable = table[DLR]{
 	name: "dlr_events",
 	columns: "ts, worker_id, gateway_id, session_id, message_id, source_addr, dest_addr, result, " +
-		"dlr_status, dlr_error, attempt, submit_ts, delay_ms, resp_ms, command_status",
+		"dlr_status, dlr_error, attempt, submit_ts, delay_ms, resp_ms, command_status, simulator",
 	encode: func(b []byte, worker uint8, e *DLR) []byte {
 		b = appendTime(b, e.TS)
 		b = append(b, worker)
@@ -163,14 +171,15 @@ var dlrTable = table[DLR]{
 		b = appendTime(b, e.SubmitTS)
 		b = binary.LittleEndian.AppendUint32(b, e.DelayMS)
 		b = binary.LittleEndian.AppendUint32(b, e.RespMS)
-		return binary.LittleEndian.AppendUint32(b, e.Status)
+		b = binary.LittleEndian.AppendUint32(b, e.Status)
+		return append(b, boolByte(e.Simulator))
 	},
 }
 
 var moTable = table[MO]{
 	name: "mo_events",
 	columns: "ts, worker_id, gateway_id, session_id, message_id, source_addr, dest_addr, result, test, " +
-		"encoding, part, parts, sm_length, text, attempt, resp_ms, command_status",
+		"encoding, part, parts, sm_length, text, attempt, resp_ms, command_status, simulator",
 	encode: func(b []byte, worker uint8, e *MO) []byte {
 		b = appendTime(b, e.TS)
 		b = append(b, worker)
@@ -190,7 +199,8 @@ var moTable = table[MO]{
 		b = appendString(b, e.Text)
 		b = append(b, e.Attempt)
 		b = binary.LittleEndian.AppendUint32(b, e.RespMS)
-		return binary.LittleEndian.AppendUint32(b, e.Status)
+		b = binary.LittleEndian.AppendUint32(b, e.Status)
+		return append(b, boolByte(e.Simulator))
 	},
 }
 
@@ -203,7 +213,7 @@ func boolByte(v bool) byte {
 
 var sessionTable = table[Session]{
 	name:    "session_events",
-	columns: "ts, worker_id, gateway_id, session_id, event, bind_type, system_id, remote, status, submits",
+	columns: "ts, worker_id, gateway_id, session_id, event, bind_type, system_id, remote, status, submits, simulator",
 	encode: func(b []byte, worker uint8, e *Session) []byte {
 		b = appendTime(b, e.TS)
 		b = append(b, worker)
@@ -214,7 +224,8 @@ var sessionTable = table[Session]{
 		b = appendString(b, e.SystemID)
 		b = appendString(b, e.Remote)
 		b = binary.LittleEndian.AppendUint32(b, e.Status)
-		return binary.LittleEndian.AppendUint64(b, e.Submits)
+		b = binary.LittleEndian.AppendUint64(b, e.Submits)
+		return append(b, boolByte(e.Simulator))
 	},
 }
 
@@ -273,3 +284,10 @@ func (b *buffer[T]) giveBack(rows []T) {
 	b.spare = rows[:0]
 	b.mu.Unlock()
 }
+
+// layout is the row layout written to spill files: 2 added the simulator
+// column at the end of every table.
+const layout = 2
+
+// legacyColumns is the column list of a table in layout 1.
+func legacyColumns(columns string) string { return strings.TrimSuffix(columns, ", simulator") }

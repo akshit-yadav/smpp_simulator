@@ -203,7 +203,7 @@ func (r *Recorder) ship(ctx context.Context, table string, rows int, data []byte
 	st := r.stats[table]
 	seq := r.nextSeq()
 	if len(r.spill.files) == 0 {
-		err := r.insert(ctx, table, r.token(seq), data)
+		err := r.insert(ctx, table, st.columns, r.token(seq), data)
 		if err == nil {
 			r.setUp(nil)
 			st.written.Add(float64(rows))
@@ -211,7 +211,7 @@ func (r *Recorder) ship(ctx context.Context, table string, rows int, data []byte
 		}
 		r.setUp(err)
 	}
-	if err := r.spill.write(spillFile{seq: seq, table: table, rows: rows}, data); err != nil {
+	if err := r.spill.write(spillFile{seq: seq, table: table, rows: rows, layout: layout}, data); err != nil {
 		st.dropped.Add(float64(rows))
 		r.dropped.Add(uint64(rows))
 		return
@@ -231,7 +231,11 @@ func (r *Recorder) replay(ctx context.Context) {
 			r.spill.quarantine(f)
 			continue
 		}
-		err = r.insert(ctx, f.table, r.token(f.seq), data)
+		columns := st.columns
+		if f.layout < layout {
+			columns = legacyColumns(columns) // the rows predate the simulator column
+		}
+		err = r.insert(ctx, f.table, columns, r.token(f.seq), data)
 		var ie *insertError
 		switch {
 		case err == nil:
@@ -293,11 +297,11 @@ func (e *insertError) Error() string { return fmt.Sprintf("clickhouse: HTTP %d: 
 // created them yet.
 func (e *insertError) permanent() bool { return e.status == http.StatusBadRequest }
 
-func (r *Recorder) insert(ctx context.Context, table, token string, data []byte) error {
+func (r *Recorder) insert(ctx context.Context, table, columns, token string, data []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, insertTimeout)
 	defer cancel()
 	q := url.Values{
-		"query":                      {"INSERT INTO " + table + " (" + r.stats[table].columns + ") FORMAT RowBinary"},
+		"query":                      {"INSERT INTO " + table + " (" + columns + ") FORMAT RowBinary"},
 		"database":                   {r.opt.Database},
 		"insert_deduplication_token": {token},
 		"deduplicate_blocks_in_dependent_materialized_views": {"1"},

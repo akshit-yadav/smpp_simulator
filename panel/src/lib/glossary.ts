@@ -81,6 +81,20 @@ export const GLOSSARY = {
   licenceKeep: "When there are more gateways than the licence allows, these stay active and the rest are suspended. Without a choice, the oldest stay.",
   licenceRequest: "A file with every worker's fingerprint. Send it to Hex Wireless to get a licence for these machines.",
 
+  // SMPP client simulator
+  tester: "psg-tester: PSG's own SMPP client. It binds to the gateways you pick and sends submit_sm like a real platform. It can run next to PSG or on another machine; for full-capacity tests, run it on another machine so it does not compete with PSG for CPU.",
+  testSessions: "SMPP sessions per gateway. TRX: each session sends and receives. TX + RX: this many transmitters send and as many receivers take the DLRs and MOs. Must fit within the gateway's max binds.",
+  testTps: "submit_sm per second across all gateways and sessions, offered at a steady rate whatever the responses do (open loop). Counts against the licence TPS cap like any client.",
+  testRamp: "Grow the rate from 0 to the target over this many seconds at the start.",
+  testWindow: "Unanswered submit_sm allowed per session. When the window is full, the slot is skipped and counted as not sent.",
+  testDlr: "registered_delivery in each submit_sm: no DLR, the final DLR, or the final DLR plus intermediate ones (bit 0x10).",
+  netDelay: "Added to every PDU in each direction, like a slow or distant network link: response times grow by two delays. Fixed, or random between a minimum and a maximum. PDUs keep their order (as on a real TCP link), so with a random delay and steady traffic most PDUs wait close to the maximum.",
+  respDelay: "How long the simulator takes to answer each deliver_sm (DLRs and MOs), like a slow platform. It exercises PSG's DLR window, timeouts and retries.",
+  keepErrors: "Keep the error log (rejected and throttled submit_sm, timeouts, disconnects, unmatched or missing DLRs; up to 10,000 entries) for 24 hours after the run. Off: it is deleted when the result arrives.",
+  pduTrace: "The tester logs every PDU to a temporary file during the run, reads it back for per-session results and deletes it as soon as the result is ready. No PDU log leaves the tester.",
+  bindRtt: "Time for the bind to be answered, before any added delay: the real network round trip between the tester and PSG.",
+  includeSimulator: "Traffic from PSG's own client simulator is left out of reports unless this is ticked.",
+
   // reports
   reportRetention: "Reports come from per-minute totals kept for 180 days. Bind history and message search use raw events, kept for 3 days.",
   ruleMix: "The share of messages each DLR rule entry actually got, against the share configured in the rule. Only messages that reached the rule count: throttled and invalid submit_sm never do.",

@@ -30,7 +30,8 @@ type dlrJob struct {
 	Outcome   outcome.Outcome `json:"o"`
 	Attempts  int             `json:"a,omitempty"`
 	QueuedAt  time.Time       `json:"q,omitzero"`
-	Interim   bool            `json:"i,omitempty"` // intermediate DLR; the final one is a separate job
+	Interim   bool            `json:"i,omitempty"`   // intermediate DLR; the final one is a separate job
+	Sim       bool            `json:"sim,omitempty"` // the submit_sm came from PSG's client simulator
 
 	// MO only. Src is the subscriber, Dst the short code; Text the start of
 	// the whole message (for events).
@@ -113,7 +114,7 @@ func receiptText(sm *pdu.SM) string {
 	return string(b)
 }
 
-func (m *Manager) scheduleDLR(rc *runtimeConfig, sm *pdu.SM, id uint64, o *outcome.Outcome, now time.Time) {
+func (m *Manager) scheduleDLR(rc *runtimeConfig, sm *pdu.SM, id uint64, o *outcome.Outcome, now time.Time, sim bool) {
 	if !rc.DLR.Enabled {
 		return
 	}
@@ -122,7 +123,7 @@ func (m *Manager) scheduleDLR(rc *runtimeConfig, sm *pdu.SM, id uint64, o *outco
 		return
 	}
 	j := &dlrJob{
-		GatewayID: rc.ID, MsgID: id,
+		GatewayID: rc.ID, MsgID: id, Sim: sim,
 		Src: sm.SourceAddr, SrcTON: sm.SourceAddrTON, SrcNPI: sm.SourceAddrNPI,
 		Dst: sm.DestAddr, DstTON: sm.DestAddrTON, DstNPI: sm.DestAddrNPI,
 		SubmitAt: now, Outcome: *o,
@@ -194,6 +195,7 @@ func (m *Manager) recordQueued(j *dlrJob, result events.DLRResult) {
 	m.record(j, events.DLR{
 		TS: time.Now(), GatewayID: j.GatewayID, MessageID: j.MsgID, Src: j.Src, Dst: j.Dst, Result: result,
 		DLRStatus: j.Outcome.DLRStatus, DLRError: j.Outcome.DLRError, Attempt: attempt(j), SubmitTS: j.SubmitAt,
+		Simulator: j.Sim,
 	})
 }
 
@@ -207,6 +209,7 @@ func (m *Manager) record(j *dlrJob, e events.DLR) {
 		TS: e.TS, GatewayID: e.GatewayID, SessionID: e.SessionID, MessageID: e.MessageID, Src: j.Src, Dst: j.Dst,
 		Result: e.Result, Test: j.Test, UCS2: j.Coding == mo.CodingUCS2, Part: j.Part, Parts: j.Parts,
 		SMLength: uint16(len(j.Payload)), Text: j.Text, Attempt: e.Attempt, RespMS: e.RespMS, Status: e.Status,
+		Simulator: e.Simulator,
 	})
 }
 
@@ -218,6 +221,7 @@ func (s *Session) dlrEvent(f *inflight, now time.Time, status pdu.Status, answer
 		TS: now, GatewayID: j.GatewayID, SessionID: s.id, MessageID: j.MsgID, Src: j.Src, Dst: j.Dst,
 		DLRStatus: j.Outcome.DLRStatus, DLRError: j.Outcome.DLRError, Attempt: attempt(j),
 		SubmitTS: j.SubmitAt, DelayMS: events.Millis(f.sentAt.Sub(j.SubmitAt)), Status: uint32(status),
+		Simulator: j.Sim || s.simulator, // an MO counts as simulator traffic when the simulator receives it
 	}
 	if answered {
 		e.RespMS = events.Millis(now.Sub(f.sentAt))

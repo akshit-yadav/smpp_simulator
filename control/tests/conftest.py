@@ -32,6 +32,7 @@ REDIS_ADDR = os.environ.get("PSG_TEST_REDIS_ADDR")
 CLICKHOUSE_URL = os.environ.get("PSG_TEST_CLICKHOUSE_URL")
 ADMIN_PASSWORD = "correct-horse-battery"
 INTERNAL_TOKEN = "test-internal-token"
+TESTER_TOKEN = "test-tester-token"
 REDIS_DB = 14
 
 needs_stores = pytest.mark.skipif(
@@ -97,6 +98,7 @@ def settings(database, rdb) -> Settings:
         redis_db=REDIS_DB,
         secret_key=base64.b64encode(secrets.token_bytes(32)).decode(),
         internal_token=INTERNAL_TOKEN,
+        tester_token=TESTER_TOKEN,
         admin_username="admin",
         admin_password=ADMIN_PASSWORD,
         port_check_timeout_s=1.0,

@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from psg_control import clickhouse, licence
+from psg_control.api import tests
 from psg_control.api.workers import upsert_from_heartbeat
 from psg_control.auth import utcnow
 from psg_control.settings import Settings
@@ -34,6 +35,11 @@ def sync_worker_registry(stores: Stores) -> int:
     return len(beats)
 
 
+def expire_stale_tests(stores: Stores) -> None:
+    with Session(stores.db) as db:
+        tests.expire_stale(db, stores)
+
+
 async def run(stores: Stores, ticker: licence.Ticker, settings: Settings) -> None:
     failing = False
     schema_ready, schema_warned = False, False
@@ -50,6 +56,7 @@ async def run(stores: Stores, ticker: licence.Ticker, settings: Settings) -> Non
         try:
             await asyncio.to_thread(sync_worker_registry, stores)
             await asyncio.to_thread(licence.tick, stores, ticker, settings.licence_require_both)
+            await asyncio.to_thread(expire_stale_tests, stores)
             if failing:
                 log.info("worker registry and licence checks recovered")
             failing = False

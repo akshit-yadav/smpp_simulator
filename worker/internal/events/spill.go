@@ -12,29 +12,45 @@ import (
 
 var errSpillFull = errors.New("event spill is full")
 
-// spillFile is one RowBinary batch on disk, named <seq>.<table>.<rows>.rb.
-// seq (Unix nanoseconds, zero-padded) orders the files and, with the worker
-// ID, forms the batch's deduplication token.
+// spillFile is one RowBinary batch on disk, named
+// <seq>.<table>.<rows>.v<layout>.rb (layout 1 files, from before the
+// simulator column, have no .v part). seq (Unix nanoseconds, zero-padded)
+// orders the files and, with the worker ID, forms the batch's deduplication
+// token.
 type spillFile struct {
-	seq   int64
-	table string
-	rows  int
-	size  int64
+	seq    int64
+	table  string
+	rows   int
+	layout int
+	size   int64
 }
 
-func (f spillFile) name() string { return fmt.Sprintf("%020d.%s.%d.rb", f.seq, f.table, f.rows) }
+func (f spillFile) name() string {
+	if f.layout <= 1 {
+		return fmt.Sprintf("%020d.%s.%d.rb", f.seq, f.table, f.rows)
+	}
+	return fmt.Sprintf("%020d.%s.%d.v%d.rb", f.seq, f.table, f.rows, f.layout)
+}
 
 func parseSpillName(name string) (spillFile, bool) {
 	parts := strings.Split(strings.TrimSuffix(name, ".rb"), ".")
-	if !strings.HasSuffix(name, ".rb") || len(parts) != 3 {
+	if !strings.HasSuffix(name, ".rb") || len(parts) < 3 || len(parts) > 4 {
 		return spillFile{}, false
 	}
 	seq, err1 := strconv.ParseInt(parts[0], 10, 64)
 	rows, err2 := strconv.Atoi(parts[2])
-	if err1 != nil || err2 != nil {
+	f := spillFile{seq: seq, table: parts[1], rows: rows, layout: 1}
+	var err3 error
+	if len(parts) == 4 {
+		if !strings.HasPrefix(parts[3], "v") {
+			return spillFile{}, false
+		}
+		f.layout, err3 = strconv.Atoi(parts[3][1:])
+	}
+	if err1 != nil || err2 != nil || err3 != nil {
 		return spillFile{}, false
 	}
-	return spillFile{seq: seq, table: parts[1], rows: rows}, true
+	return f, true
 }
 
 // spill is a directory of batches waiting for ClickHouse, oldest first. Only

@@ -289,3 +289,42 @@ class LicenceRow(Base):
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime)
     uploaded_by: Mapped[str | None] = mapped_column(String(64))
     clock_high_water: Mapped[datetime | None] = mapped_column(DateTime)  # naive UTC
+
+
+class Tester(Base):
+    """An SMPP client simulator agent (psg-tester), registered by its heartbeat."""
+
+    __tablename__ = "tester"
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, autoincrement=False)
+    name: Mapped[str] = mapped_column(String(64))
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    version: Mapped[str | None] = mapped_column(String(32))
+    mem_available_mb: Mapped[int | None] = mapped_column(Integer)
+    running_run: Mapped[int | None] = mapped_column(BigInteger)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class TestRun(Base):
+    """A simulator test run: what to send (spec, without passwords), its state
+    and, when finished, the result. Per-PDU data never reaches the control
+    plane; errors live in Redis for 24 h at most."""
+
+    __tablename__ = "test_run"
+    __test__ = False  # not a pytest test class
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    tester_id: Mapped[int | None] = mapped_column(ForeignKey("tester.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(
+        String(16), default="queued"
+    )  # queued|running|done|stopped|failed
+    spec: Mapped[dict] = mapped_column(JSON)
+    keep_errors: Mapped[bool] = mapped_column(Boolean, default=True)
+    stop_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    result: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)

@@ -26,6 +26,7 @@ const NAV: { group: string; items: Item[] }[] = [
     items: [
       { to: "/reports", label: "Reports" },
       { to: "/search", label: "Message search" },
+      { to: "/tester", label: "Gateway tester" },
     ],
   },
   {

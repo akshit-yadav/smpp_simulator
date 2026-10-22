@@ -23,7 +23,7 @@ while grep -q '__generate__' .env; do
   key=$(sed -n "${line}p" .env | cut -d= -f1)
   case "$key" in
     PSG_SECRET_KEY) value=$(openssl rand -base64 32) ;;
-    PSG_INTERNAL_TOKEN) value=$(openssl rand -hex 32) ;;
+    PSG_INTERNAL_TOKEN | PSG_TESTER_TOKEN) value=$(openssl rand -hex 32) ;;
     *) value=$(openssl rand -hex 16) ;;
   esac
   sed -i "${line}s|__generate__|${value}|" .env

@@ -288,6 +288,7 @@ export interface SubmitEvent {
   registered_delivery: number;
   data_coding: number;
   sm_length: number;
+  simulator?: number;
 }
 
 export interface DlrEvent {
@@ -308,6 +309,7 @@ export interface DlrEvent {
   delay_ms: number;
   resp_ms: number;
   command_status: number;
+  simulator?: number;
 }
 
 export interface MessageSearchResult {
@@ -393,6 +395,7 @@ export interface MoEvent {
   attempt: number;
   resp_ms: number;
   command_status: number;
+  simulator?: number;
 }
 
 export interface MoRow {
@@ -452,4 +455,139 @@ export interface LicenceSummary {
     uploaded_at: string | null;
     uploaded_by: string | null;
   };
+}
+
+// ---- SMPP client simulator (M10) ---------------------------------------------------
+
+export interface Tester {
+  id: number;
+  name: string;
+  ip: string;
+  version: string | null;
+  online: boolean;
+  mem_available_mb: number | null;
+  running_run: number | null;
+  last_seen: string | null;
+}
+
+export interface DelaySpec {
+  min_ms: number;
+  max_ms: number;
+}
+
+export interface TestSpec {
+  tester_id?: number;
+  gateway_ids: number[];
+  sessions: number;
+  bind_type: "trx" | "tx_rx";
+  tps: number;
+  duration_s: number;
+  ramp_up_s: number;
+  window: number;
+  dlr: "none" | "final" | "intermediate";
+  text: string;
+  encoding: "gsm7" | "ucs2";
+  net_delay: DelaySpec;
+  resp_delay: DelaySpec;
+  keep_errors: boolean;
+  trace: boolean;
+}
+
+export interface TestSecond {
+  t: number;
+  sent: number;
+  ok: number;
+  throttled: number;
+  rejected: number;
+  errors: number;
+  dlrs: number;
+  p50_us: number;
+  p99_us: number;
+}
+
+export interface TestLatency {
+  p50_us: number;
+  p90_us: number;
+  p99_us: number;
+  p999_us: number;
+  max_us: number;
+}
+
+export interface TestResult {
+  started: string;
+  finished: string;
+  stopped?: string;
+  offered_tps: number;
+  achieved_tps: number;
+  sessions: number;
+  bind_failed: number;
+  bind_rtt_ms: number;
+  sent: number;
+  ok: number;
+  throttled: number;
+  rejected: number;
+  timeouts: number;
+  unanswered: number;
+  not_sent_window_or_queue_full: number;
+  disconnects: number;
+  unexpected: number;
+  statuses: Record<string, number>;
+  latency: TestLatency;
+  dlrs: number;
+  dlrs_missing: number;
+  dlrs_unmatched: number;
+  intermediate_dlrs: number;
+  dlr_status: Record<string, number>;
+  dlr_delay_p50_ms: number;
+  dlr_delay_p99_ms: number;
+  mo: number;
+  errors: number;
+  errors_logged: number;
+  targets: {
+    gateway_id: number;
+    name: string;
+    addr: string;
+    sessions: number;
+    bind_failed: number;
+    sent: number;
+    ok: number;
+    throttled: number;
+    rejected: number;
+    timeouts: number;
+    dlrs: number;
+    latency: TestLatency;
+  }[];
+  per_session?: { session: number; gateway: string; bind_type: string; sent: number; ok: number; not_ok: number; deliver_sm: number; p50_us: number; p99_us: number }[];
+  trace_full?: boolean;
+  timeline: TestSecond[];
+}
+
+export interface TestRunOut {
+  id: number;
+  tester_id: number | null;
+  status: "queued" | "running" | "done" | "stopped" | "failed";
+  spec: Omit<TestSpec, "tester_id" | "keep_errors"> & { targets: { gateway_id: number; name: string; port: number }[] };
+  keep_errors: boolean;
+  stop_requested: boolean;
+  created_by: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  summary: { sent: number; ok: number; errors: number; achieved_tps: number; stopped?: string } | null;
+  result?: TestResult | null;
+  progress?: { progress: { phase: string; elapsed_ms: number; sent: number; ok: number; errors: number; dlrs: number }; mem_available_mb: number } | null;
+  timeline?: TestSecond[];
+  warnings?: string[];
+}
+
+export interface TestError {
+  ts: string;
+  gateway: string;
+  session: number;
+  kind: string;
+  command?: string;
+  seq?: number;
+  status?: string;
+  detail?: string;
 }

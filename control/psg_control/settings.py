@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     secret_key: SecretStr | None = None
     internal_token: SecretStr | None = None
+    tester_token: SecretStr | None = None  # for psg-tester agents only
     admin_username: str = "admin"
     admin_password: SecretStr | None = None
     session_ttl_hours: int = 12

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -25,8 +26,8 @@ type fakeCH struct {
 }
 
 type fakeInsert struct {
-	table, token string
-	size         int
+	table, token, query string
+	size                int
 }
 
 func (f *fakeCH) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +43,7 @@ func (f *fakeCH) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	table := strings.Fields(q.Get("query"))[2]
-	f.inserts = append(f.inserts, fakeInsert{table: table, token: q.Get("insert_deduplication_token"), size: len(body)})
+	f.inserts = append(f.inserts, fakeInsert{table: table, token: q.Get("insert_deduplication_token"), query: q.Get("query"), size: len(body)})
 }
 
 func (f *fakeCH) set(down bool, status int) {
@@ -111,6 +112,24 @@ func TestSpillAndReplayInOrder(t *testing.T) {
 	}
 	if left, _ := os.ReadDir(dir); len(left) != 0 || r2.spill.bytes.Load() != 0 {
 		t.Fatalf("spill not emptied: %d files, %d bytes", len(left), r2.spill.bytes.Load())
+	}
+}
+
+// A batch spilled by a worker from before the simulator column (layout 1, no
+// .v part in its name) is replayed with the old column list.
+func TestLegacySpillReplaysWithOldColumns(t *testing.T) {
+	ch := &fakeCH{}
+	srv := httptest.NewServer(ch)
+	defer srv.Close()
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "00000000000000000001.submit_events.1.rb"), []byte("x"), 0o640)
+	r := newTestRecorder(t, srv.URL, dir, 1<<30)
+	r.Submit(Submit{TS: time.Now(), Simulator: true})
+	r.flush(context.Background()) // queued behind the old file, so spilled as layout 2
+	r.replay(context.Background())
+	got := ch.got()
+	if len(got) != 2 || strings.Contains(got[0].query, "simulator") || !strings.Contains(got[1].query, "sm_length, simulator)") {
+		t.Fatalf("inserts %+v", got)
 	}
 }
 
@@ -191,7 +210,7 @@ func TestClickHouseRoundTrip(t *testing.T) {
 	// written twice, in the table or in the roll-up.
 	data := submitTable.encode(nil, 3, &Submit{TS: ts, GatewayID: 6, Result: SubmitThrottled})
 	for range 2 {
-		if err := r.insert(context.Background(), "submit_events", "psg-w3-42", data); err != nil {
+		if err := r.insert(context.Background(), "submit_events", submitTable.columns, "psg-w3-42", data); err != nil {
 			t.Fatal(err)
 		}
 	}
