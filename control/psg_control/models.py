@@ -8,6 +8,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     SmallInteger,
@@ -238,3 +239,33 @@ class Gateway(Base):
     dlr_rule_id: Mapped[int | None] = mapped_column(ForeignKey("dlr_rule.id", ondelete="SET NULL"))
 
     worker: Mapped[Worker] = relationship(lazy="joined")
+
+
+class MOGenerator(Base):
+    """A gateway's MO traffic generator (M7). One row per gateway, created on
+    first save; run_id goes up on every Start so the worker can tell runs apart."""
+
+    __tablename__ = "mo_generator"
+
+    gateway_id: Mapped[int] = mapped_column(
+        ForeignKey("gateway.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    run_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    mode: Mapped[str] = mapped_column(String(8), default="rate")  # rate | burst
+    rate: Mapped[float] = mapped_column(Float, default=1.0)
+    burst: Mapped[int] = mapped_column(BigInteger, default=100)
+    start_at: Mapped[datetime | None] = mapped_column(DateTime)  # naive UTC; NULL = on Start
+    stop_after_s: Mapped[int] = mapped_column(BigInteger, default=0)  # 0 = no limit
+    stop_after_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    sources: Mapped[dict] = mapped_column(JSON)  # schemas.MOSources
+    destinations: Mapped[list] = mapped_column(JSON)
+    dest_order: Mapped[str] = mapped_column(String(16), default="round_robin")
+    templates: Mapped[list] = mapped_column(JSON)  # [{text, weight}]
+    keywords: Mapped[list] = mapped_column(JSON)
+    encoding: Mapped[str] = mapped_column(String(8), default="gsm7")
+    long_pct: Mapped[int] = mapped_column(Integer, default=0)
+    no_receiver: Mapped[str] = mapped_column(String(8), default="queue")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )

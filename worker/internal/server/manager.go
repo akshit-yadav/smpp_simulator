@@ -299,7 +299,7 @@ func (m *Manager) drainQueues() {
 		}
 		for _, j := range m.queue.pop(id, 5000) {
 			if now.Sub(j.QueuedAt) > m.opt.QueueMaxAge {
-				gw.stats.DLRExpired.Add(1)
+				gw.stats.countDelivery(j, events.DLRExpired)
 				m.recordQueued(j, events.DLRExpired)
 				continue
 			}

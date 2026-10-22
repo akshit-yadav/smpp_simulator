@@ -29,6 +29,7 @@ STEPS_S = (60, 300, 900, 3600, 6 * 3600, 86400)
 MAX_POINTS = 360
 SUBMIT_RESULTS = ("accepted", "rejected", "throttled", "invalid", "licence_throttled")
 DLR_RESULTS = ("acknowledged", "retried", "failed", "queued", "expired")
+MO_RESULTS = DLR_RESULTS + ("dropped",)
 # Roll-up rows whose minute overlaps [from, to).
 MINUTES = "minute >= toStartOfMinute({from:DateTime64(3)}) AND minute < {to:DateTime64(3)}"
 DELAY_BUCKETS_MS = (0, 100, 250, 500, 1000, 2000, 5000, 10000, 20000, 30000, 60000, 120000)
@@ -154,6 +155,40 @@ def traffic(
         merged[key] |= row
     rows = [merged[k] for k in sorted(merged)]
     return respond(rows, format, "traffic", {"from": start, "to": end, "step": step})
+
+
+@router.get("/reports/mo")
+def mo_traffic(
+    db: DB,
+    admin: Admin,
+    stores: StoresDep,
+    start: Annotated[datetime | None, Query(alias="from")] = None,
+    end: Annotated[datetime | None, Query(alias="to")] = None,
+    gateway_id: GatewayIDs = None,
+    step: Annotated[int | None, Query(ge=60, le=86400)] = None,
+    format: Format = "json",
+):
+    """MO deliver_sm by result, per gateway and time step. Each part of a long
+    MO counts once; `test` counts those sent with "Send test MO"."""
+    start, end = time_range(start, end)
+    step = step or pick_step(start, end)
+    params = {"from": start, "to": end, "step": step}
+    gw = gateway_filter(gateway_id, params)
+    rows = run(
+        stores.clickhouse,
+        "SELECT toUnixTimestamp(toStartOfInterval(minute, toIntervalSecond({step:UInt32}))) * 1000"
+        " AS t, gateway_id, "
+        + ", ".join(f"sumIf(messages, result = '{r}') AS {r}" for r in MO_RESULTS)
+        + ", sumIf(messages, test = 1) AS test"
+        + f" FROM mo_minute WHERE {MINUTES} {gw} GROUP BY t, gateway_id ORDER BY t, gateway_id",
+        params,
+    )
+    names = gateway_names(db)
+    rows = [
+        {"t": r["t"], "gateway_id": r["gateway_id"], "gateway": names.get(r["gateway_id"])} | r
+        for r in rows
+    ]
+    return respond(rows, format, "mo", {"from": start, "to": end, "step": step})
 
 
 @router.get("/reports/outcomes")
@@ -337,6 +372,11 @@ SUBMIT_COLUMNS = (
     "toString(message_id) AS message_id, source_addr, dest_addr, toString(result) AS result, "
     "command_status, outcome, dlr_status, dlr_error, registered_delivery, data_coding, sm_length"
 )
+MO_COLUMNS = (
+    "toUnixTimestamp64Milli(ts) AS ts, worker_id, gateway_id, session_id, "
+    "toString(message_id) AS message_id, source_addr, dest_addr, toString(result) AS result, "
+    "test, encoding, part, parts, sm_length, text, attempt, resp_ms, command_status"
+)
 DLR_COLUMNS = (
     "toUnixTimestamp64Milli(ts) AS ts, worker_id, gateway_id, session_id, "
     "toString(message_id) AS message_id, source_addr, dest_addr, toString(result) AS result, "
@@ -358,7 +398,8 @@ def search_messages(
     format: Format = "json",
 ):
     """Submit and DLR events of one message (by message ID) or of every
-    message to a destination, newest first. Raw events are kept 3 days, so
+    message to a destination, newest first, plus MO events of that ID or with
+    that number as subscriber or short code. Raw events are kept 3 days, so
     from defaults to 3 days ago."""
     if bool(message_id) == bool(destination):
         raise HTTPException(status_code=422, detail="Give either message_id or destination.")
@@ -370,32 +411,42 @@ def search_messages(
         if not ids:
             raise HTTPException(status_code=422, detail="Not a message ID (hex or decimal).")
         params["ids"] = ids
-        match = "e.message_id IN {ids:Array(UInt64)}"
+        match = mo_match = "e.message_id IN {ids:Array(UInt64)}"
     else:
         params["dst"] = destination.strip()
         match = "e.dest_addr = {dst:String}"
-    where = f"e.ts >= {{from:DateTime64(3)}} AND e.ts < {{to:DateTime64(3)}} AND {match}"
+        mo_match = "(e.source_addr = {dst:String} OR e.dest_addr = {dst:String})"
+    when = "e.ts >= {from:DateTime64(3)} AND e.ts < {to:DateTime64(3)}"
+    where = f"{when} AND {match}"
     order = "ORDER BY e.ts DESC LIMIT {limit:UInt32}"
     ch = stores.clickhouse
     submits = run(
         ch, f"SELECT {SUBMIT_COLUMNS} FROM submit_events AS e WHERE {where} {order}", params
     )
     dlrs = run(ch, f"SELECT {DLR_COLUMNS} FROM dlr_events AS e WHERE {where} {order}", params)
+    mos = run(
+        ch, f"SELECT {MO_COLUMNS} FROM mo_events AS e WHERE {when} AND {mo_match} {order}", params
+    )
     names = gateway_names(db)
-    for r in submits + dlrs:
+    for r in submits + dlrs + mos:
         mid = int(r["message_id"])
         r["message_id"] = format_id(mid)
         r["message_id_dec"] = str(mid) if mid else ""
         r["gateway"] = names.get(r["gateway_id"])
     if format == "csv":
-        rows = [{"event": "submit"} | r for r in submits] + [{"event": "dlr"} | r for r in dlrs]
+        rows = (
+            [{"event": "submit"} | r for r in submits]
+            + [{"event": "dlr"} | r for r in dlrs]
+            + [{"event": "mo"} | r for r in mos]
+        )
         keys = list(dict.fromkeys(k for r in rows for k in r))
         rows = sorted(({k: r.get(k, "") for k in keys} for r in rows), key=lambda r: -r["ts"])
         return csv_response(rows, "messages")
     return {
         "submits": submits,
         "dlrs": dlrs,
-        "truncated": len(submits) == limit or len(dlrs) == limit,
+        "mos": mos,
+        "truncated": limit in (len(submits), len(dlrs), len(mos)),
     }
 
 

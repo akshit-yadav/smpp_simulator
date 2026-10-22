@@ -32,6 +32,7 @@ const (
 	DLRFailed
 	DLRQueued
 	DLRExpired
+	MODropped // MO only: no receiver bound and the generator drops
 )
 
 type SessionEvent uint8
@@ -77,6 +78,26 @@ type DLR struct {
 	DelayMS   uint32 // submit_sm accepted -> deliver_sm sent
 	RespMS    uint32 // deliver_sm sent -> deliver_sm_resp
 	Status    uint32 // deliver_sm_resp command_status
+}
+
+// MO is one step in an MO deliver_sm's life. Result uses the DLR values plus
+// MODropped.
+type MO struct {
+	TS        time.Time
+	GatewayID int64
+	SessionID uint64
+	MessageID uint64 // assigned by PSG for search; MO has no SMSC message ID
+	Src, Dst  string
+	Result    DLRResult
+	Test      bool // sent with "Send test MO"
+	UCS2      bool
+	Part      uint8
+	Parts     uint8
+	SMLength  uint16
+	Text      string // the start of the whole message's text
+	Attempt   uint8
+	RespMS    uint32
+	Status    uint32
 }
 
 // Session is a bind, failed bind, close or admin kill.
@@ -143,6 +164,40 @@ var dlrTable = table[DLR]{
 		b = binary.LittleEndian.AppendUint32(b, e.RespMS)
 		return binary.LittleEndian.AppendUint32(b, e.Status)
 	},
+}
+
+var moTable = table[MO]{
+	name: "mo_events",
+	columns: "ts, worker_id, gateway_id, session_id, message_id, source_addr, dest_addr, result, test, " +
+		"encoding, part, parts, sm_length, text, attempt, resp_ms, command_status",
+	encode: func(b []byte, worker uint8, e *MO) []byte {
+		b = appendTime(b, e.TS)
+		b = append(b, worker)
+		b = binary.LittleEndian.AppendUint32(b, uint32(e.GatewayID))
+		b = binary.LittleEndian.AppendUint64(b, e.SessionID)
+		b = binary.LittleEndian.AppendUint64(b, e.MessageID)
+		b = appendString(b, e.Src)
+		b = appendString(b, e.Dst)
+		b = append(b, byte(e.Result), boolByte(e.Test))
+		if e.UCS2 {
+			b = appendString(b, "ucs2")
+		} else {
+			b = appendString(b, "gsm7")
+		}
+		b = append(b, e.Part, e.Parts)
+		b = binary.LittleEndian.AppendUint16(b, e.SMLength)
+		b = appendString(b, e.Text)
+		b = append(b, e.Attempt)
+		b = binary.LittleEndian.AppendUint32(b, e.RespMS)
+		return binary.LittleEndian.AppendUint32(b, e.Status)
+	},
+}
+
+func boolByte(v bool) byte {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 var sessionTable = table[Session]{

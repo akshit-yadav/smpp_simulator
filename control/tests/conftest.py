@@ -138,6 +138,7 @@ class FakeWorker:
         self.rdb, self.id, self.busy = rdb, worker_id, set(busy_ports)
         self.events: list[dict] = []
         self.killed: list[int] = []
+        self.mos: list[dict] = []
         rdb.set(
             f"psg:worker:{worker_id}:hb",
             json.dumps(
@@ -173,10 +174,19 @@ class FakeWorker:
             elif data.get("type") == "kill_session":
                 self.killed.append(data["session"])
                 self._reply(data["id"], data["session"] == 5, "session not found")
+            elif data.get("type") == "send_mo":
+                self.mos.append(data)
+                ok = data["text"] != "no receiver"
+                self._reply(
+                    data["id"], ok, "no RX or TRX session is bound to this gateway", "abc123"
+                )
 
-    def _reply(self, rid, ok, error):
+    def _reply(self, rid, ok, error, message_id=None):
         key = f"psg:reply:{rid}"
-        self.rdb.rpush(key, json.dumps({"ok": ok, "error": "" if ok else error}))
+        reply = {"ok": ok, "error": "" if ok else error}
+        if ok and message_id:
+            reply["message_id"] = message_id
+        self.rdb.rpush(key, json.dumps(reply))
         self.rdb.expire(key, 30)
 
     def stop(self):

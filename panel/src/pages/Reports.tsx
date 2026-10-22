@@ -7,6 +7,7 @@ import {
   useGateway,
   useGateways,
   useMixReport,
+  useMoReport,
   useTrafficReport,
   type ReportQuery,
 } from "../api/queries";
@@ -16,7 +17,7 @@ import { Badge, Card, Empty, ErrorBox, Loading, PageHead, Segmented, Tabs, Term 
 import { fmtMs, fmtNum, fmtTime, hex } from "../lib/format";
 
 type Preset = "1h" | "6h" | "24h" | "7d" | "30d";
-type Tab = "traffic" | "mix" | "delay" | "throttling" | "binds";
+type Tab = "traffic" | "mix" | "delay" | "throttling" | "mo" | "binds";
 
 const PRESET_MS: Record<Preset, number> = { "1h": 3600e3, "6h": 6 * 3600e3, "24h": 86400e3, "7d": 7 * 86400e3, "30d": 30 * 86400e3 };
 const TAB_PATH: Record<Tab, string> = {
@@ -24,6 +25,7 @@ const TAB_PATH: Record<Tab, string> = {
   mix: "/reports/outcomes",
   delay: "/reports/dlr-delay",
   throttling: "/reports/traffic",
+  mo: "/reports/mo",
   binds: "/reports/binds",
 };
 
@@ -96,6 +98,7 @@ export default function Reports() {
             { value: "mix", label: "DLR rule mix" },
             { value: "delay", label: "DLR delay" },
             { value: "throttling", label: "Throttling" },
+            { value: "mo", label: "MO traffic" },
             { value: "binds", label: "Bind history" },
           ]}
         />
@@ -103,6 +106,7 @@ export default function Reports() {
         {tab === "mix" && <MixTab query={query} />}
         {tab === "delay" && <DelayTab query={query} />}
         {tab === "throttling" && <ThrottlingTab query={query} />}
+        {tab === "mo" && <MoTab query={query} />}
         {tab === "binds" && <BindsTab query={query} />}
       </div>
     </>
@@ -513,6 +517,95 @@ function ThrottlingTab({ query }: { query: ReportQuery }) {
                     <td className="num mono">{fmtNum(g.gw)}</td>
                     <td className="num mono">{fmtNum(g.lic)}</td>
                     <td className="num mono">{g.offered ? `${((100 * (g.gw + g.lic)) / g.offered).toFixed(2)}%` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </>
+  );
+}
+
+// ---- MO traffic --------------------------------------------------------------------
+
+const MO_KEYS = ["acknowledged", "retried", "failed", "queued", "expired", "dropped", "test"] as const;
+type MoCounts = Record<(typeof MO_KEYS)[number], number>;
+
+function MoTab({ query }: { query: ReportQuery }) {
+  const r = useMoReport(query);
+  const data = r.data;
+  const { times, counts, perGateway } = useMemo(() => {
+    const empty = { times: [] as number[], counts: [] as MoCounts[], perGateway: [] as [number, { name: string | null; c: MoCounts }][] };
+    if (!data) return empty;
+    const zero = Object.fromEntries(MO_KEYS.map((k) => [k, 0])) as MoCounts;
+    const plus = (a: MoCounts, b: MoCounts) => Object.fromEntries(MO_KEYS.map((k) => [k, a[k] + b[k]])) as MoCounts;
+    const byT = new Map<number, MoCounts>();
+    const byGw = new Map<number, { name: string | null; c: MoCounts }>();
+    for (const row of data.rows) {
+      byT.set(row.t, plus(byT.get(row.t) ?? zero, row));
+      const g = byGw.get(row.gateway_id) ?? { name: row.gateway, c: zero };
+      byGw.set(row.gateway_id, { name: g.name, c: plus(g.c, row) });
+    }
+    const ms = data.step * 1000;
+    for (let t = Math.floor(Date.parse(data.from) / ms) * ms; t < Date.parse(data.to); t += ms) {
+      empty.times.push(t);
+      empty.counts.push(byT.get(t) ?? zero);
+    }
+    empty.perGateway = [...byGw.entries()].sort((a, b) => b[1].c.acknowledged - a[1].c.acknowledged);
+    return empty;
+  }, [data]);
+
+  if (r.isLoading) return <Loading />;
+  if (r.error || !data) return <ErrorBox error={r.error} />;
+  const per = stepLabel(data.step);
+  return (
+    <>
+      <Card title={<Term info="moGenerator">{`MO deliver_sm per ${per}`}</Term>}>
+        <LineChart
+          ariaLabel={`MO deliver_sm per ${per}: acknowledged, queued and dropped or failed`}
+          times={times}
+          unit=""
+          formatTime={timeFormatter(data.step)}
+          legendValue={total}
+          emptyText="No MO traffic in this range."
+          series={[
+            { name: "Acknowledged", color: "var(--series-1)", values: counts.map((c) => c.acknowledged) },
+            { name: "Queued", color: "var(--series-2)", values: counts.map((c) => c.queued) },
+            { name: "Dropped or failed", color: "var(--series-3)", values: counts.map((c) => c.dropped + c.failed) },
+          ]}
+        />
+      </Card>
+      <Card title="By gateway">
+        {perGateway.length === 0 ? (
+          <Empty title="No MO traffic in this range" />
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Gateway</th>
+                  <th className="num">Acknowledged</th>
+                  <th className="num">Retried</th>
+                  <th className="num">Failed</th>
+                  <th className="num">Queued</th>
+                  <th className="num">Expired</th>
+                  <th className="num">Dropped</th>
+                  <th className="num">
+                    <Term info="moTest">Test MOs</Term>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {perGateway.map(([id, g]) => (
+                  <tr key={id}>
+                    <td>{g.name ? <Link to={`/gateways/${id}`}>{g.name}</Link> : <span className="muted">deleted (#{id})</span>}</td>
+                    {MO_KEYS.map((k) => (
+                      <td key={k} className="num mono">
+                        {fmtNum(g.c[k])}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>

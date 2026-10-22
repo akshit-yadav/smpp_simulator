@@ -21,6 +21,7 @@ from psg_control.api import (
     health,
     internal,
     live,
+    mo,
     reports,
     workers,
 )
@@ -84,6 +85,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
         workers,
         gateways,
         live,
+        mo,
         reports,
         dlr_rules,
         catalog,

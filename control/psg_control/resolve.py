@@ -10,6 +10,7 @@ from psg_control.models import (
     DLRError,
     DLRRule,
     Gateway,
+    MOGenerator,
     Worker,
 )
 from psg_control.security import Cipher
@@ -57,8 +58,42 @@ def outcome_config(rule: DLRRule, errors: dict[str, DLRError]) -> dict:
     return out
 
 
-def gateway_config(gw: Gateway, eff: dict, outcome: dict, cipher: Cipher) -> dict:
-    return {
+def mo_config(mo: MOGenerator) -> dict:
+    """An MO generator row in the worker's gateway.MO shape."""
+    src = mo.sources
+    out = {
+        "enabled": mo.enabled,
+        "run_id": mo.run_id,
+        "mode": mo.mode,
+        "rate": mo.rate,
+        "burst": mo.burst,
+        "stop_after_s": mo.stop_after_s,
+        "stop_after_count": mo.stop_after_count,
+        "sources": {
+            "kind": src["kind"],
+            "list": src.get("numbers") or [],
+            "from": src.get("range_from") or "",
+            "to": src.get("range_to") or "",
+            "prefix": src.get("prefix") or "",
+            "digits": src.get("digits") or 0,
+        },
+        "destinations": mo.destinations,
+        "dest_order": mo.dest_order,
+        "templates": mo.templates,
+        "keywords": mo.keywords,
+        "encoding": mo.encoding,
+        "long_pct": mo.long_pct,
+        "no_receiver": mo.no_receiver,
+    }
+    if mo.start_at is not None:
+        out["start_at"] = mo.start_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return out
+
+
+def gateway_config(
+    gw: Gateway, eff: dict, outcome: dict, cipher: Cipher, mo: MOGenerator | None = None
+) -> dict:
+    cfg = {
         "id": gw.id,
         "name": gw.name,
         "port": gw.port,
@@ -86,6 +121,9 @@ def gateway_config(gw: Gateway, eff: dict, outcome: dict, cipher: Cipher) -> dic
         "outcome": outcome,
         "version": gw.version,
     }
+    if mo is not None:
+        cfg["mo"] = mo_config(mo)
+    return cfg
 
 
 def worker_config(db: Session, cipher: Cipher, worker: Worker) -> dict:
@@ -94,12 +132,19 @@ def worker_config(db: Session, cipher: Cipher, worker: Worker) -> dict:
     errors = {e.code: e for e in db.scalars(select(DLRError))}
     rules: dict[int, dict] = {}
     gateways = []
-    for gw in db.scalars(
-        select(Gateway).where(Gateway.worker_id == worker.id).order_by(Gateway.id)
-    ):
+    rows = list(
+        db.scalars(select(Gateway).where(Gateway.worker_id == worker.id).order_by(Gateway.id))
+    )
+    mos = {
+        m.gateway_id: m
+        for m in db.scalars(
+            select(MOGenerator).where(MOGenerator.gateway_id.in_([g.id for g in rows]))
+        )
+    }
+    for gw in rows:
         eff = effective(gw, d)
         rid = eff["dlr_rule_id"]
         if rid not in rules:
             rules[rid] = outcome_config(db.get(DLRRule, rid), errors)
-        gateways.append(gateway_config(gw, eff, rules[rid], cipher))
+        gateways.append(gateway_config(gw, eff, rules[rid], cipher, mos.get(gw.id)))
     return {"worker_id": worker.id, "version": worker.config_version, "gateways": gateways}

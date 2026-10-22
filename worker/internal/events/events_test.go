@@ -164,6 +164,9 @@ func TestClickHouseRoundTrip(t *testing.T) {
 	}
 	r.DLR(DLR{TS: ts, GatewayID: 5, SessionID: 9, MessageID: 1, Dst: "919800000000", Result: DLRAcknowledged,
 		DLRStatus: "DELIVRD", DLRError: "000", Attempt: 1, SubmitTS: ts.Add(-1500 * time.Millisecond), DelayMS: 1500, RespMS: 4})
+	r.MO(MO{TS: ts, GatewayID: 5, SessionID: 9, MessageID: 77, Src: "919800000001", Dst: "56161", Result: DLRAcknowledged,
+		Test: true, UCS2: true, Part: 1, Parts: 2, SMLength: 140, Text: "नमस्ते", Attempt: 1, RespMS: 3})
+	r.MO(MO{TS: ts, GatewayID: 5, MessageID: 78, Result: MODropped})
 	r.Session(Session{TS: ts, GatewayID: 5, SessionID: 9, Event: SessionClosed, BindType: "trx", SystemID: "sys", Remote: "1.2.3.4:5", Submits: 25_000})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -174,6 +177,8 @@ func TestClickHouseRoundTrip(t *testing.T) {
 		"SELECT sum(messages) FROM submit_minute WHERE result = 'accepted' AND outcome = 'delivered'":                   "25000",
 		"SELECT result, delay_ms, resp_ms, attempt, toString(submit_ts) FROM dlr_events":                                "acknowledged\t1500\t4\t1\t2026-10-22 09:59:58.623",
 		"SELECT delay_bucket, dlrs FROM dlr_minute":                                                                     "1000\t1",
+		"SELECT result, test, encoding, part, parts, text, resp_ms FROM mo_events WHERE message_id = 77":                "acknowledged\t1\tucs2\t1\t2\tनमस्ते\t3",
+		"SELECT groupArray(toString(result)) FROM (SELECT result FROM mo_minute ORDER BY result)":                       "['acknowledged','dropped']",
 		"SELECT event, remote, submits FROM session_events":                                                             "closed\t1.2.3.4:5\t25000",
 	}
 	for q, w := range want {

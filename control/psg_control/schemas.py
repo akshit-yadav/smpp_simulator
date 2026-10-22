@@ -353,3 +353,90 @@ class AuditOut(BaseModel):
     entity_id: str | None
     ip: str | None
     details: dict | None
+
+
+# ---- MO generator (M7) -------------------------------------------------------------
+
+Msisdn = Annotated[str, Field(pattern=r"^\+?\d{1,20}$")]
+Address = Annotated[str, Field(pattern=r"^[A-Za-z0-9+]{1,20}$")]
+
+
+class MOSources(Strict):
+    """Source MSISDNs: a list, a numeric range, or a prefix plus random digits."""
+
+    kind: Literal["list", "range", "prefix"]
+    numbers: list[Msisdn] = Field(default_factory=list, max_length=1000)
+    range_from: str | None = Field(default=None, pattern=r"^\d{1,19}$")
+    range_to: str | None = Field(default=None, pattern=r"^\d{1,19}$")
+    prefix: str = Field(default="", pattern=r"^\+?\d{0,15}$")
+    digits: int = Field(default=0, ge=0, le=15)
+
+    @model_validator(mode="after")
+    def check_kind(self):
+        if self.kind == "list" and not self.numbers:
+            raise ValueError("add at least one source number")
+        if self.kind == "range":
+            if self.range_from is None or self.range_to is None:
+                raise ValueError("a range needs range_from and range_to")
+            if int(self.range_from) > int(self.range_to):
+                raise ValueError("range_from must be <= range_to")
+        if self.kind == "prefix":
+            if self.digits == 0:
+                raise ValueError("a prefix needs at least one random digit")
+            if len(self.prefix.lstrip("+")) + self.digits > 20:
+                raise ValueError("prefix plus digits must be at most 20 digits")
+        return self
+
+
+class MOTemplate(Strict):
+    text: str = Field(min_length=1, max_length=1000)
+    weight: int = Field(default=1, ge=1, le=1000)
+
+
+class MOSettings(Strict):
+    mode: Literal["rate", "burst"] = "rate"
+    rate: float = Field(default=1.0, gt=0, le=10_000)
+    burst: int = Field(default=100, ge=1, le=1_000_000)
+    start_at: datetime | None = None  # None: as soon as it is started
+    stop_after_s: int = Field(default=0, ge=0, le=30 * 86400)  # 0: no limit
+    stop_after_count: int = Field(default=0, ge=0, le=1_000_000_000)
+    sources: MOSources
+    destinations: list[Address] = Field(min_length=1, max_length=100)
+    dest_order: Literal["round_robin", "random"] = "round_robin"
+    templates: list[MOTemplate] = Field(min_length=1, max_length=20)
+    keywords: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
+        default_factory=list, max_length=100
+    )
+    encoding: Literal["gsm7", "ucs2"] = "gsm7"
+    long_pct: int = Field(default=0, ge=0, le=100)
+    no_receiver: Literal["queue", "drop"] = "queue"
+
+
+class MOStatus(BaseModel):
+    """The generator as last reported by the worker (null if it is not reporting)."""
+
+    state: Literal["stopped", "scheduled", "running", "finished"]
+    run_id: int
+    run_sent: int
+    sent: int
+    acknowledged: int
+    retried: int
+    failed: int
+    queued: int
+    expired: int
+    dropped: int
+
+
+class MOOut(MOSettings):
+    configured: bool  # false: never saved; the values are suggestions
+    enabled: bool
+    run_id: int
+    updated_at: datetime | None = None
+    status: MOStatus | None = None
+
+
+class MOTestIn(Strict):
+    source: Msisdn
+    destination: Address
+    text: str = Field(min_length=1, max_length=1000)
+    encoding: Literal["gsm7", "ucs2"] = "gsm7"

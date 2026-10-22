@@ -5,7 +5,8 @@
 //   - It pulls the full config from the internal API when a change is
 //     published on psg:cfg:<worker_id>, when (re)subscribing, and when the
 //     60 s version check finds a newer version.
-//   - It answers commands on psg:cmd:<worker_id> (port_check, kill_session)
+//   - It answers commands on psg:cmd:<worker_id> (port_check, kill_session,
+//     send_mo)
 //     and reports each gateway's listener state to psg:gwstatus:<worker_id>.
 //   - Every second it publishes live counters (psg:stats:<worker_id>) and
 //     bound sessions (psg:sessions:<worker_id>) for the panel.
@@ -50,6 +51,7 @@ type Manager interface {
 	StatsSnapshot() map[int64]server.StatsSnapshot
 	Sessions() []server.SessionInfo
 	KillSession(id uint64) bool
+	SendTestMO(gatewayID int64, src, dst, text string, ucs2 bool) (uint64, error)
 	Backlog() (pending, queued int)
 }
 
@@ -164,6 +166,13 @@ type command struct {
 	ID      string `json:"id"`
 	Port    int    `json:"port"`
 	Session uint64 `json:"session"`
+
+	// send_mo
+	Gateway     int64  `json:"gateway"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Text        string `json:"text"`
+	Encoding    string `json:"encoding"` // gsm7 | ucs2
 }
 
 func (s *Source) handleCommand(ctx context.Context, payload string) {
@@ -181,6 +190,13 @@ func (s *Source) handleCommand(ctx context.Context, payload string) {
 	case "kill_session":
 		if !s.mgr.KillSession(c.Session) {
 			reply = map[string]any{"ok": false, "error": "session not found"}
+		}
+	case "send_mo":
+		id, err := s.mgr.SendTestMO(c.Gateway, c.Source, c.Destination, c.Text, c.Encoding == "ucs2")
+		if err != nil {
+			reply = map[string]any{"ok": false, "error": err.Error()}
+		} else {
+			reply["message_id"] = strconv.FormatUint(id, 16)
 		}
 	default:
 		reply = map[string]any{"ok": false, "error": "unknown command " + c.Type}

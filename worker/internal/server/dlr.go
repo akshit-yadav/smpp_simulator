@@ -7,13 +7,15 @@ import (
 
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/events"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/mo"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/msgid"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/outcome"
 	"github.com/akshit-yadav/smpp_simulator/worker/pkg/smpp/pdu"
 )
 
-// dlrJob is one delivery receipt waiting to be sent. Field names are short
-// because queued jobs are persisted to Redis as JSON.
+// dlrJob is one deliver_sm waiting to be sent: a delivery receipt or, with
+// Kind jobMO, an MO message (part). Both share the window, retries and queue.
+// Field names are short because queued jobs are persisted to Redis as JSON.
 type dlrJob struct {
 	GatewayID int64           `json:"g"`
 	MsgID     uint64          `json:"m"`
@@ -29,7 +31,21 @@ type dlrJob struct {
 	Attempts  int             `json:"a,omitempty"`
 	QueuedAt  time.Time       `json:"q,omitzero"`
 	Interim   bool            `json:"i,omitempty"` // intermediate DLR; the final one is a separate job
+
+	// MO only. Src is the subscriber, Dst the short code; Text the start of
+	// the whole message (for events).
+	Kind    byte   `json:"k,omitempty"`
+	Payload []byte `json:"p,omitempty"` // short_message octets, with UDH if ESM has 0x40
+	Coding  byte   `json:"c,omitempty"`
+	ESM     byte   `json:"e,omitempty"`
+	Part    uint8  `json:"pn,omitempty"`
+	Parts   uint8  `json:"pt,omitempty"`
+	Test    bool   `json:"tst,omitempty"`
 }
+
+const jobMO byte = 1
+
+func (j *dlrJob) isMO() bool { return j.Kind == jobMO }
 
 // wantDLR applies registered_delivery: bits 0-1 = 01 always, 10 on failure
 // only; intermediate statuses need bit 4.
@@ -139,7 +155,8 @@ func (m *Manager) scheduleAt(j *dlrJob, at, now time.Time) {
 	m.dispatch(j)
 }
 
-// dispatch hands a due DLR to a bound receiver, or queues it.
+// dispatch hands a due DLR or MO to a bound receiver, or queues it. An MO
+// with no receiver bound is dropped instead if the generator says so.
 func (m *Manager) dispatch(j *dlrJob) {
 	gw := m.gateway(j.GatewayID)
 	if gw == nil {
@@ -156,7 +173,14 @@ func (m *Manager) dispatch(j *dlrJob) {
 		default: // that session is backed up; try the next one
 		}
 	}
-	gw.stats.DLRQueued.Add(1)
+	if j.isMO() && !gw.hasReceivers() {
+		if mc := gw.config().MO; mc != nil && mc.NoReceiver == gateway.MODrop {
+			gw.stats.countDelivery(j, events.MODropped)
+			m.recordQueued(j, events.MODropped)
+			return
+		}
+	}
+	gw.stats.countDelivery(j, events.DLRQueued)
 	if j.QueuedAt.IsZero() {
 		j.QueuedAt = time.Now()
 	}
@@ -164,12 +188,25 @@ func (m *Manager) dispatch(j *dlrJob) {
 	m.queue.push(j)
 }
 
-// recordQueued emits a dlr_events row for a DLR entering or expiring from the
-// queue. Call it while no other goroutine can change j.
+// recordQueued emits an event for a job entering, expiring from or (MO)
+// dropped instead of the queue. Call it while no other goroutine can change j.
 func (m *Manager) recordQueued(j *dlrJob, result events.DLRResult) {
-	m.events.DLR(events.DLR{
+	m.record(j, events.DLR{
 		TS: time.Now(), GatewayID: j.GatewayID, MessageID: j.MsgID, Src: j.Src, Dst: j.Dst, Result: result,
 		DLRStatus: j.Outcome.DLRStatus, DLRError: j.Outcome.DLRError, Attempt: attempt(j), SubmitTS: j.SubmitAt,
+	})
+}
+
+// record emits e as a dlr_events row, or as an mo_events row for an MO job.
+func (m *Manager) record(j *dlrJob, e events.DLR) {
+	if !j.isMO() {
+		m.events.DLR(e)
+		return
+	}
+	m.events.MO(events.MO{
+		TS: e.TS, GatewayID: e.GatewayID, SessionID: e.SessionID, MessageID: e.MessageID, Src: j.Src, Dst: j.Dst,
+		Result: e.Result, Test: j.Test, UCS2: j.Coding == mo.CodingUCS2, Part: j.Part, Parts: j.Parts,
+		SMLength: uint16(len(j.Payload)), Text: j.Text, Attempt: e.Attempt, RespMS: e.RespMS, Status: e.Status,
 	})
 }
 
@@ -196,10 +233,10 @@ func attempt(j *dlrJob) uint8 { return uint8(min(j.Attempts+1, 0xFF)) }
 func (m *Manager) retryDLR(gw *Gateway, j *dlrJob) events.DLRResult {
 	j.Attempts++
 	if j.Attempts > m.opt.DLRRetries {
-		gw.stats.DLRFailed.Add(1)
+		gw.stats.countDelivery(j, events.DLRFailed)
 		return events.DLRFailed
 	}
-	gw.stats.DLRRetried.Add(1)
+	gw.stats.countDelivery(j, events.DLRRetried)
 	m.wheel.Add(time.Now().Add(time.Second<<(j.Attempts-1)), j)
 	return events.DLRRetried
 }
@@ -225,8 +262,14 @@ func (s *Session) dlrLoop() {
 			s.pendMu.Lock()
 			s.pending[seq] = &inflight{job: j, sentAt: now}
 			s.pendMu.Unlock()
-			if s.send(encodeDLR(s.gw.config(), j, seq, now)) {
-				s.gw.stats.DLRSent.Add(1)
+			var b []byte
+			if j.isMO() {
+				b = encodeMO(j, seq)
+			} else {
+				b = encodeDLR(s.gw.config(), j, seq, now)
+			}
+			if s.send(b) {
+				s.gw.stats.countSent(j)
 			}
 		}
 	}
@@ -256,12 +299,12 @@ func (s *Session) handleDeliverResp(p pdu.Packet) {
 	<-s.window
 	e := s.dlrEvent(f, time.Now(), p.Status, true)
 	if p.CommandID == pdu.DeliverSMResp && p.Status == pdu.ESME_ROK {
-		s.gw.stats.DLRAck.Add(1)
+		s.gw.stats.countDelivery(f.job, events.DLRAcknowledged)
 		e.Result = events.DLRAcknowledged
 	} else {
 		e.Result = s.m.retryDLR(s.gw, f.job)
 	}
-	s.m.events.DLR(e)
+	s.m.record(f.job, e)
 }
 
 func (s *Session) sweepTimeouts() {
@@ -280,7 +323,7 @@ func (s *Session) sweepTimeouts() {
 		<-s.window
 		e := s.dlrEvent(f, now, pdu.ESME_ROK, false)
 		e.Result = s.m.retryDLR(s.gw, f.job)
-		s.m.events.DLR(e)
+		s.m.record(f.job, e)
 	}
 }
 
@@ -380,6 +423,16 @@ func encodeDLR(rc *runtimeConfig, j *dlrJob, seq uint32, now time.Time) []byte {
 		}
 	}
 	return pdu.Encode(pdu.DeliverSM, pdu.ESME_ROK, seq, sm.Append(make([]byte, 0, 64+len(t))))
+}
+
+// encodeMO builds an MO deliver_sm (esm_class 0x00, or 0x40 with a UDH).
+func encodeMO(j *dlrJob, seq uint32) []byte {
+	sm := pdu.SM{
+		SourceAddrTON: 1, SourceAddrNPI: 1, SourceAddr: j.Src,
+		DestAddrTON: 0, DestAddrNPI: 1, DestAddr: j.Dst,
+		ESMClass: j.ESM, DataCoding: j.Coding, ShortMessage: j.Payload,
+	}
+	return pdu.Encode(pdu.DeliverSM, pdu.ESME_ROK, seq, sm.Append(make([]byte, 0, 48+len(j.Payload))))
 }
 
 func truncate(s string, n int) string {

@@ -8,6 +8,10 @@ import type {
   DelayReport,
   MessageSearchResult,
   MixReport,
+  MOOut,
+  MoReport,
+  MOSettings,
+  MOTest,
   TrafficReport,
   CommandStatus,
   Defaults,
@@ -237,6 +241,7 @@ const report = <T,>(path: string, params: Record<string, string | number | undef
 export const useTrafficReport = (q: ReportQuery) => report<TrafficReport>("/reports/traffic", { ...q });
 export const useMixReport = (q: ReportQuery) => report<MixReport>("/reports/outcomes", { ...q }, q.gateway_id !== undefined);
 export const useDelayReport = (q: ReportQuery) => report<DelayReport>("/reports/dlr-delay", { ...q });
+export const useMoReport = (q: ReportQuery) => report<MoReport>("/reports/mo", { ...q });
 export const useBindReport = (q: ReportQuery) => report<BindReport>("/reports/binds", { ...q });
 
 export const useMessageSearch = (params: { message_id?: string; destination?: string } | null) =>
@@ -246,3 +251,19 @@ export const useMessageSearch = (params: { message_id?: string; destination?: st
     enabled: params !== null,
     staleTime: 10_000,
   });
+
+// ---- MO generator ----------------------------------------------------------------
+
+export const useMO = (gatewayId: number) =>
+  useQuery({ queryKey: ["mo", gatewayId], queryFn: () => get<MOOut>(`/gateways/${gatewayId}/mo`), refetchInterval: 2000 });
+
+export function useMOAction(gatewayId: number) {
+  const qc = useQueryClient();
+  const done = (mo: MOOut) => qc.setQueryData(["mo", gatewayId], mo);
+  return {
+    save: useMutation({ mutationFn: (b: MOSettings) => put<MOOut>(`/gateways/${gatewayId}/mo`, b), onSuccess: done }),
+    start: useMutation({ mutationFn: () => post<MOOut>(`/gateways/${gatewayId}/mo/start`), onSuccess: done }),
+    stop: useMutation({ mutationFn: () => post<MOOut>(`/gateways/${gatewayId}/mo/stop`), onSuccess: done }),
+    test: useMutation({ mutationFn: (b: MOTest) => post<{ message_id: string }>(`/gateways/${gatewayId}/mo/test`, b) }),
+  };
+}

@@ -47,6 +47,7 @@ type Recorder struct {
 
 	submits  buffer[Submit]
 	dlrs     buffer[DLR]
+	mos      buffer[MO]
 	sessions buffer[Session]
 	notify   chan struct{} // a buffer reached batchRows
 
@@ -92,7 +93,8 @@ func New(opt Options) (*Recorder, error) {
 		Help: "Event rows by table and result (written, spilled to disk, dropped).",
 	}, []string{"table", "result"})
 	for name, cols := range map[string]string{
-		submitTable.name: submitTable.columns, dlrTable.name: dlrTable.columns, sessionTable.name: sessionTable.columns,
+		submitTable.name: submitTable.columns, dlrTable.name: dlrTable.columns,
+		moTable.name: moTable.columns, sessionTable.name: sessionTable.columns,
 	} {
 		r.stats[name] = &tableStats{
 			columns: cols,
@@ -121,6 +123,12 @@ func (r *Recorder) Submit(e Submit) {
 func (r *Recorder) DLR(e DLR) {
 	if r != nil {
 		record(r, &r.dlrs, &e, r.stats[dlrTable.name])
+	}
+}
+
+func (r *Recorder) MO(e MO) {
+	if r != nil {
+		record(r, &r.mos, &e, r.stats[moTable.name])
 	}
 }
 
@@ -169,6 +177,7 @@ func (r *Recorder) Run(ctx context.Context) {
 func (r *Recorder) flush(ctx context.Context) {
 	flushTable(ctx, r, &r.submits, &submitTable)
 	flushTable(ctx, r, &r.dlrs, &dlrTable)
+	flushTable(ctx, r, &r.mos, &moTable)
 	flushTable(ctx, r, &r.sessions, &sessionTable)
 }
 

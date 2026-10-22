@@ -1,16 +1,16 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { reportUrl, useMessageSearch } from "../api/queries";
-import type { DlrEvent, SubmitEvent } from "../api/types";
+import type { DlrEvent, MoEvent, SubmitEvent } from "../api/types";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHead, Segmented, Term } from "../components/ui";
 import { fmtMs, fmtNum, fmtTime, hex } from "../lib/format";
 
 type Kind = "message_id" | "destination";
 
-type Row = { kind: "submit"; e: SubmitEvent } | { kind: "dlr"; e: DlrEvent };
+type Row = { kind: "submit"; e: SubmitEvent } | { kind: "dlr"; e: DlrEvent } | { kind: "mo"; e: MoEvent };
 
 const SUBMIT_TONE = { accepted: "good", rejected: "critical", throttled: "warning", licence_throttled: "warning", invalid: "critical" } as const;
-const DLR_TONE = { acknowledged: "good", retried: "warning", failed: "critical", queued: "neutral", expired: "critical" } as const;
+const DLR_TONE = { acknowledged: "good", retried: "warning", failed: "critical", queued: "neutral", expired: "critical", dropped: "critical" } as const;
 
 export default function MessageSearch() {
   // The search lives in the URL, so a result can be linked and Back works.
@@ -30,11 +30,12 @@ export default function MessageSearch() {
   const rows: Row[] = [
     ...(r.data?.submits ?? []).map((e) => ({ kind: "submit" as const, e })),
     ...(r.data?.dlrs ?? []).map((e) => ({ kind: "dlr" as const, e })),
+    ...(r.data?.mos ?? []).map((e) => ({ kind: "mo" as const, e })),
   ].sort((a, b) => b.e.ts - a.e.ts || (a.kind === "dlr" ? -1 : 1));
 
   return (
     <>
-      <PageHead title="Message search" sub={<Term info="messageSearch">Every submit_sm and DLR event of a message, from the last 3 days.</Term>} />
+      <PageHead title="Message search" sub={<Term info="messageSearch">Every submit_sm, DLR and MO event of a message or number, from the last 3 days.</Term>} />
       <div className="stack">
         <Card>
           <form
@@ -50,7 +51,7 @@ export default function MessageSearch() {
               onChange={setKind}
               options={[
                 { value: "message_id", label: "Message ID" },
-                { value: "destination", label: "Destination" },
+                { value: "destination", label: "Number" },
               ]}
             />
             <input
@@ -82,7 +83,7 @@ export default function MessageSearch() {
           <div className="card">
             <Empty title="Nothing found">
               <p className="muted">
-                No submit_sm or DLR {active === "message_id" ? "with this message ID" : "to this destination"} in the last 3 days.
+                No submit_sm, DLR or MO {active === "message_id" ? "with this message ID" : "for this number"} in the last 3 days.
               </p>
             </Empty>
           </div>
@@ -114,7 +115,7 @@ export default function MessageSearch() {
                             </>
                           ) : (
                             <>
-                              DLR <Badge tone={DLR_TONE[row.e.result]}>{row.e.result}</Badge>
+                              {row.kind === "dlr" ? "DLR" : "MO"} <Badge tone={DLR_TONE[row.e.result]}>{row.e.result}</Badge>
                             </>
                           )}
                         </td>
@@ -134,7 +135,7 @@ export default function MessageSearch() {
                         <td>{row.e.gateway ? <Link to={`/gateways/${row.e.gateway_id}`}>{row.e.gateway}</Link> : <span className="muted">#{row.e.gateway_id}</span>}</td>
                         <td className="mono">{row.e.source_addr || "—"}</td>
                         <td className="mono">{row.e.dest_addr || "—"}</td>
-                        <td className="small">{row.kind === "submit" ? submitDetails(row.e) : dlrDetails(row.e)}</td>
+                        <td className="small">{row.kind === "submit" ? submitDetails(row.e) : row.kind === "dlr" ? dlrDetails(row.e) : moDetails(row.e)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -172,6 +173,16 @@ function dlrDetails(e: DlrEvent): string {
     if (e.command_status) parts.push(`deliver_sm_resp ${hex(e.command_status)}`);
   }
   if (e.result === "queued") parts.push("no receiver bound; kept for up to 72 h");
+  return parts.join(" · ");
+}
+
+function moDetails(e: MoEvent): string {
+  const parts = [`"${e.text}"`, e.encoding.toUpperCase()];
+  if (e.parts > 1) parts.push(`part ${e.part} of ${e.parts}`);
+  if (e.test) parts.push("test MO");
+  if (e.resp_ms) parts.push(`answered in ${fmtMs(e.resp_ms)}`);
+  if (e.command_status) parts.push(`deliver_sm_resp ${hex(e.command_status)}`);
+  if (e.result === "dropped") parts.push("no receiver bound");
   return parts.join(" · ");
 }
 

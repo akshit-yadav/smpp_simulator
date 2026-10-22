@@ -312,5 +312,104 @@ export interface DlrEvent {
 export interface MessageSearchResult {
   submits: SubmitEvent[];
   dlrs: DlrEvent[];
+  mos: MoEvent[];
   truncated: boolean;
+}
+
+// ---- MO generator (M7) -------------------------------------------------------------
+
+export interface MOSources {
+  kind: "list" | "range" | "prefix";
+  numbers: string[];
+  range_from: string | null;
+  range_to: string | null;
+  prefix: string;
+  digits: number;
+}
+
+export interface MOSettings {
+  mode: "rate" | "burst";
+  rate: number;
+  burst: number;
+  start_at: string | null; // UTC; null = when started
+  stop_after_s: number; // 0 = no limit
+  stop_after_count: number;
+  sources: MOSources;
+  destinations: string[];
+  dest_order: "round_robin" | "random";
+  templates: { text: string; weight: number }[];
+  keywords: string[];
+  encoding: "gsm7" | "ucs2";
+  long_pct: number;
+  no_receiver: "queue" | "drop";
+}
+
+export interface MOStatus {
+  state: "stopped" | "scheduled" | "running" | "finished";
+  run_id: number;
+  run_sent: number;
+  sent: number;
+  acknowledged: number;
+  retried: number;
+  failed: number;
+  queued: number;
+  expired: number;
+  dropped: number;
+}
+
+export interface MOOut extends MOSettings {
+  configured: boolean;
+  enabled: boolean;
+  run_id: number;
+  updated_at: string | null;
+  status: MOStatus | null;
+}
+
+export interface MOTest {
+  source: string;
+  destination: string;
+  text: string;
+  encoding: "gsm7" | "ucs2";
+}
+
+export interface MoEvent {
+  ts: number;
+  worker_id: number;
+  gateway_id: number;
+  gateway: string | null;
+  session_id: number;
+  message_id: string;
+  message_id_dec: string;
+  source_addr: string;
+  dest_addr: string;
+  result: "acknowledged" | "retried" | "failed" | "queued" | "expired" | "dropped";
+  test: number;
+  encoding: string;
+  part: number;
+  parts: number;
+  sm_length: number;
+  text: string;
+  attempt: number;
+  resp_ms: number;
+  command_status: number;
+}
+
+export interface MoRow {
+  t: number;
+  gateway_id: number;
+  gateway: string | null;
+  acknowledged: number;
+  retried: number;
+  failed: number;
+  queued: number;
+  expired: number;
+  dropped: number;
+  test: number;
+}
+
+export interface MoReport {
+  from: string;
+  to: string;
+  step: number;
+  rows: MoRow[];
 }

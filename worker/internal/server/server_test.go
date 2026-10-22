@@ -679,3 +679,167 @@ func TestIntermediateDLRs(t *testing.T) {
 		t.Fatalf("queued DLRs %s then %s", s1, s2)
 	}
 }
+
+func moConfig(runID int64) *gateway.MO {
+	return &gateway.MO{
+		Enabled: true, RunID: runID, Mode: gateway.MORate, Rate: 200,
+		Sources:      gateway.MOSources{Kind: "list", List: []string{"919800000001"}},
+		Destinations: []string{"56161"}, DestOrder: "round_robin",
+		Templates: []gateway.MOText{{Text: "Hi {seq}", Weight: 1}},
+		Encoding:  "gsm7", NoReceiver: gateway.MOQueue,
+	}
+}
+
+// waitMOs collects n MO deliver_sm (esm_class without the 0x04 receipt bit).
+func waitMOs(t *testing.T, cl *client, n int, within time.Duration) []*gpdu.DeliverSM {
+	t.Helper()
+	var got []*gpdu.DeliverSM
+	deadline := time.After(within)
+	for len(got) < n {
+		select {
+		case d := <-cl.dlrs:
+			if d.EsmClass&0x04 == 0 {
+				got = append(got, d)
+			}
+		case <-deadline:
+			t.Fatalf("got %d MOs, want %d", len(got), n)
+		}
+	}
+	return got
+}
+
+func waitMOState(t *testing.T, m *Manager, run int64, state string) MOSnapshot {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if s := m.StatsSnapshot()[1].MO; s.RunID == run && s.State == state {
+			return s
+		} else if time.Now().After(deadline) {
+			t.Fatalf("MO run %d state %q, want run %d %q", s.RunID, s.State, run, state)
+		}
+	}
+}
+
+func TestMOGenerator(t *testing.T) {
+	c := testConfig(t)
+	c.DLR.Enabled = false
+	m := startManager(t, c)
+	cl := mustBind(t, c, "trx")
+
+	// A count-limited run at 200/s.
+	c.MO = moConfig(1)
+	c.MO.StopAfterCount = 100
+	start := time.Now()
+	m.Apply([]gateway.Config{c})
+	mos := waitMOs(t, cl, 100, 3*time.Second)
+	if el := time.Since(start); el < 450*time.Millisecond || el > 800*time.Millisecond {
+		t.Errorf("100 MOs at 200/s took %v", el)
+	}
+	if mos[0].SourceAddr.Address() != "919800000001" || mos[0].DestAddr.Address() != "56161" {
+		t.Fatalf("MO %s -> %s", mos[0].SourceAddr.Address(), mos[0].DestAddr.Address())
+	}
+	if text, _ := mos[0].Message.GetMessage(); text != "Hi 1" {
+		t.Fatalf("first MO text %q", text)
+	}
+	if s := waitMOState(t, m, 1, "finished"); s.RunSent != 100 || s.Ack < 100 {
+		t.Fatalf("snapshot %+v", s)
+	}
+	noDLR(t, cl, 100*time.Millisecond) // finished runs stay finished
+
+	// Rate accuracy (brief: within ±2%): 500/s for 2 s.
+	c.MO = moConfig(2)
+	c.MO.Rate, c.MO.StopAfterS = 500, 2
+	m.Apply([]gateway.Config{c})
+	waitMOState(t, m, 2, "finished")
+	if n := m.StatsSnapshot()[1].MO.RunSent; n < 980 || n > 1020 {
+		t.Errorf("500/s for 2 s sent %d", n)
+	}
+	waitMOs(t, cl, int(m.StatsSnapshot()[1].MO.RunSent), 3*time.Second)
+
+	// Burst of long UCS2 messages: every part has a UDH; parts count toward the burst.
+	c.MO = moConfig(3)
+	c.MO.Mode, c.MO.Burst, c.MO.Encoding, c.MO.LongPct = gateway.MOBurst, 12, "ucs2", 100
+	c.MO.Templates = []gateway.MOText{{Text: "नमस्ते {seq}", Weight: 1}}
+	m.Apply([]gateway.Config{c})
+	burst := waitMOState(t, m, 3, "finished")
+	if burst.RunSent < 12 || burst.RunSent > 14 { // the last message may add parts past 12
+		t.Fatalf("burst of 12 sent %d parts", burst.RunSent)
+	}
+	for _, d := range waitMOs(t, cl, int(burst.RunSent), 3*time.Second) {
+		if d.Message.Encoding().DataCoding() != 0x08 || d.EsmClass != 0x40 || len(d.Message.UDH()) == 0 {
+			t.Fatalf("part: data_coding %#x esm_class %#x udh %v", d.Message.Encoding().DataCoding(), d.EsmClass, d.Message.UDH())
+		}
+	}
+
+	// Test MO: needs a receiver.
+	id, err := m.SendTestMO(1, "919811111111", "56161", "TEST hello", false)
+	if err != nil || id == 0 {
+		t.Fatalf("test MO: %v", err)
+	}
+	if d := waitMOs(t, cl, 1, time.Second)[0]; d.SourceAddr.Address() != "919811111111" {
+		t.Fatalf("test MO from %s", d.SourceAddr.Address())
+	}
+	_ = cl.sess.Close()
+	for deadline := time.Now().Add(3 * time.Second); len(m.Sessions()) > 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("session still bound")
+		}
+	}
+	if _, err := m.SendTestMO(1, "1", "2", "x", false); !errors.Is(err, ErrNoReceiver) {
+		t.Fatalf("test MO without receiver: %v", err)
+	}
+
+	// No receiver: "drop" drops, "queue" queues until a receiver binds.
+	c.MO = moConfig(4)
+	c.MO.Mode, c.MO.Burst, c.MO.NoReceiver = gateway.MOBurst, 5, gateway.MODrop
+	m.Apply([]gateway.Config{c})
+	waitMOState(t, m, 4, "finished")
+	if s := m.StatsSnapshot()[1].MO; s.Dropped != 5 || m.queue.TotalLen() != 0 {
+		t.Fatalf("drop: %+v, queued %d", s, m.queue.TotalLen())
+	}
+	c.MO = moConfig(5)
+	c.MO.Mode, c.MO.Burst = gateway.MOBurst, 5
+	m.Apply([]gateway.Config{c})
+	waitMOState(t, m, 5, "finished")
+	if m.queue.TotalLen() != 5 {
+		t.Fatalf("queued %d, want 5", m.queue.TotalLen())
+	}
+	rx := mustBind(t, c, "rx")
+	waitMOs(t, rx, 5, 2*time.Second)
+
+	// Disabling stops the generator. (A new struct: the worker holds the old one.)
+	off := *c.MO
+	off.Enabled = false
+	c.MO = &off
+	m.Apply([]gateway.Config{c})
+	waitMOState(t, m, 5, "stopped")
+}
+
+func TestMORunResumesAfterRestart(t *testing.T) {
+	rdb := testRedis(t)
+	c := testConfig(t)
+	c.MO = moConfig(7)
+	c.MO.Rate, c.MO.StopAfterCount, c.MO.NoReceiver = 100, 60, gateway.MODrop
+
+	m1 := NewManager(Options{ListenHost: "127.0.0.1", Redis: rdb})
+	m1.Apply([]gateway.Config{c})
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { m1.Run(ctx); close(done) }()
+	for deadline := time.Now().Add(3 * time.Second); m1.StatsSnapshot()[1].MO.RunSent < 20; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("run did not start")
+		}
+	}
+	stop() // worker restart: progress is saved when the gateway stops
+	<-done
+	saved, err := rdb.HGet(context.Background(), moProgressKey(1), "sent").Int64()
+	if err != nil || saved < 20 || saved >= 60 {
+		t.Fatalf("saved progress %d (%v)", saved, err)
+	}
+
+	m2 := startManagerWith(t, Options{Redis: rdb}, c)
+	s := waitMOState(t, m2, 7, "finished")
+	if s.RunSent != 60 || int64(s.Dropped) != 60-saved {
+		t.Fatalf("after restart: run sent %d, this worker sent %d; want 60 and %d", s.RunSent, s.Dropped, 60-saved)
+	}
+}

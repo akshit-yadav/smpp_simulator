@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/outcome"
 )
@@ -67,6 +68,73 @@ type DLR struct {
 	IntermediateMS     int    `json:"intermediate_delay_ms"` // after submit_sm
 }
 
+const (
+	MORate  = "rate"  // steady messages per second
+	MOBurst = "burst" // N messages as fast as the receivers take them
+
+	MOQueue = "queue" // no receiver bound: queue (like DLRs)
+	MODrop  = "drop"
+)
+
+// MO is a gateway's MO traffic generator. A run is identified by RunID: the
+// control plane bumps it on every Start, and the worker counts progress per
+// run so a restart resumes instead of starting over.
+type MO struct {
+	Enabled        bool       `json:"enabled"`
+	RunID          int64      `json:"run_id"`
+	Mode           string     `json:"mode"`  // rate | burst
+	Rate           float64    `json:"rate"`  // messages (parts) per second
+	Burst          int64      `json:"burst"` // burst size
+	StartAt        *time.Time `json:"start_at,omitempty"`
+	StopAfterS     int64      `json:"stop_after_s,omitempty"`     // 0 = no limit
+	StopAfterCount int64      `json:"stop_after_count,omitempty"` // 0 = no limit
+	Sources        MOSources  `json:"sources"`
+	Destinations   []string   `json:"destinations"`
+	DestOrder      string     `json:"dest_order"` // round_robin | random
+	Templates      []MOText   `json:"templates"`
+	Keywords       []string   `json:"keywords,omitempty"`
+	Encoding       string     `json:"encoding"` // gsm7 | ucs2
+	LongPct        int        `json:"long_pct"` // share of messages sent as 2-3 parts
+	NoReceiver     string     `json:"no_receiver"`
+}
+
+type MOSources struct {
+	Kind   string   `json:"kind"` // list | range | prefix
+	List   []string `json:"list,omitempty"`
+	From   string   `json:"from,omitempty"`
+	To     string   `json:"to,omitempty"`
+	Prefix string   `json:"prefix,omitempty"`
+	Digits int      `json:"digits,omitempty"`
+}
+
+type MOText struct {
+	Text   string `json:"text"`
+	Weight int    `json:"weight"`
+}
+
+func (m *MO) validate() error {
+	var errs []error
+	check := func(ok bool, format string, args ...any) {
+		if !ok {
+			errs = append(errs, fmt.Errorf(format, args...))
+		}
+	}
+	switch m.Mode {
+	case MORate:
+		check(m.Rate > 0, "mo.rate must be positive")
+	case MOBurst:
+		check(m.Burst > 0, "mo.burst must be positive")
+	default:
+		check(false, "invalid mo.mode %q", m.Mode)
+	}
+	check(m.StopAfterS >= 0 && m.StopAfterCount >= 0, "mo stop limits must be >= 0")
+	check(m.Encoding == "gsm7" || m.Encoding == "ucs2", "invalid mo.encoding %q", m.Encoding)
+	check(m.LongPct >= 0 && m.LongPct <= 100, "mo.long_pct must be 0-100")
+	check(m.NoReceiver == MOQueue || m.NoReceiver == MODrop, "invalid mo.no_receiver %q", m.NoReceiver)
+	check(m.DestOrder == "round_robin" || m.DestOrder == "random", "invalid mo.dest_order %q", m.DestOrder)
+	return errors.Join(errs...)
+}
+
 type Config struct {
 	ID        int64           `json:"id"`
 	Name      string          `json:"name"`
@@ -79,6 +147,7 @@ type Config struct {
 	TPS       TPS             `json:"tps"`
 	DLR       DLR             `json:"dlr"`
 	Outcome   outcome.Profile `json:"outcome"`
+	MO        *MO             `json:"mo,omitempty"`
 	Version   int64           `json:"version"`
 }
 
@@ -137,6 +206,11 @@ func (c *Config) Validate() error {
 	}
 	if err := c.Outcome.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("outcome: %w", err))
+	}
+	if c.MO != nil {
+		if err := c.MO.validate(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("gateway %d (%s): %w", c.ID, c.Name, err)

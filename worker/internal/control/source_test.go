@@ -61,6 +61,13 @@ func (f *fakeManager) KillSession(id uint64) bool { return id == 5 }
 
 func (f *fakeManager) Backlog() (int, int) { return 3, 4 }
 
+func (f *fakeManager) SendTestMO(gw int64, src, dst, text string, ucs2 bool) (uint64, error) {
+	if gw != 1 || src == "" || dst == "" || text == "" || !ucs2 {
+		return 0, server.ErrNoReceiver
+	}
+	return 0xabc, nil
+}
+
 func (f *fakeManager) last() []gateway.Config {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -229,11 +236,13 @@ func TestPortCheckCommand(t *testing.T) {
 	})
 
 	cmds := map[string]bool{
-		`{"type":"port_check","id":"a","port":20010}`:  true,
-		`{"type":"port_check","id":"b","port":20099}`:  false,
-		`{"type":"kill_session","id":"c","session":5}`: true,
-		`{"type":"kill_session","id":"d","session":6}`: false,
-		`{"type":"reboot_universe","id":"e","port":1}`: false,
+		`{"type":"port_check","id":"a","port":20010}`:                                                                true,
+		`{"type":"port_check","id":"b","port":20099}`:                                                                false,
+		`{"type":"kill_session","id":"c","session":5}`:                                                               true,
+		`{"type":"kill_session","id":"d","session":6}`:                                                               false,
+		`{"type":"reboot_universe","id":"e","port":1}`:                                                               false,
+		`{"type":"send_mo","id":"f","gateway":1,"source":"9198","destination":"5616","text":"hi","encoding":"ucs2"}`: true,
+		`{"type":"send_mo","id":"g","gateway":2,"source":"9198","destination":"5616","text":"hi"}`:                   false,
 	}
 	for cmd, wantOK := range cmds {
 		var c command

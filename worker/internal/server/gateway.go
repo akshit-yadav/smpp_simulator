@@ -34,6 +34,10 @@ type Gateway struct {
 	stopped   bool
 	receivers atomic.Pointer[[]*Session] // copy-on-write; bound RX/TRX sessions
 	rr        atomic.Uint64
+
+	done   chan struct{} // closed by stop
+	moDone chan struct{} // closed when the MO generator has saved its progress and exited
+	moWake chan struct{} // config changed: re-check the MO generator now
 }
 
 func listen(host string, port int) (net.Listener, error) {
@@ -51,16 +55,26 @@ func (m *Manager) newGateway(rc *runtimeConfig, ln net.Listener) *Gateway {
 		ln:       ln,
 		stats:    m.statsFor(rc.ID),
 		sessions: map[*Session]struct{}{},
+		done:     make(chan struct{}),
+		moDone:   make(chan struct{}),
+		moWake:   make(chan struct{}, 1),
 	}
 	gw.cfg.Store(rc)
 	gw.receivers.Store(&[]*Session{})
 	go gw.acceptLoop()
+	go gw.moLoop()
 	return gw
 }
 
 func (gw *Gateway) config() *runtimeConfig { return gw.cfg.Load() }
 
-func (gw *Gateway) update(rc *runtimeConfig) { gw.cfg.Store(rc) }
+func (gw *Gateway) update(rc *runtimeConfig) {
+	gw.cfg.Store(rc)
+	select {
+	case gw.moWake <- struct{}{}:
+	default:
+	}
+}
 
 func (gw *Gateway) acceptLoop() {
 	for {
@@ -93,6 +107,7 @@ func (gw *Gateway) stop(reason string) {
 		return
 	}
 	gw.stopped = true
+	close(gw.done)
 	sessions := make([]*Session, 0, len(gw.sessions))
 	for s := range gw.sessions {
 		sessions = append(sessions, s)
@@ -103,6 +118,7 @@ func (gw *Gateway) stop(reason string) {
 	for _, s := range sessions {
 		s.unbindAndClose()
 	}
+	<-gw.moDone // its MO progress is saved before a replacement gateway (or a restart) loads it
 	gw.m.log.Info("gateway stopped", "gateway_id", gw.id, "reason", reason, "sessions", len(sessions))
 }
 

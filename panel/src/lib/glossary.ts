@@ -61,6 +61,18 @@ export const GLOSSARY = {
   workerDrain: "A draining worker keeps running its gateways but accepts no new ones. Move its gateways away before taking it down.",
   configVersion: "Increases on every change. Workers compare it every 60 seconds to make sure they run the latest settings.",
 
+  // MO generator
+  moGenerator: "Sends mobile-originated messages (deliver_sm with esm_class 0x00) to this gateway's RX and TRX sessions, as if subscribers were texting the platform. Each part of a long message counts as one message.",
+  moMode: "Rate: a steady number of messages per second. Burst: a fixed number of messages, sent as fast as the receivers take them.",
+  moStart: "Leave empty to start when you press Start. With a time, the generator waits until then.",
+  moStop: "The run ends after this long or this many messages, whichever comes first. 0 means no limit; Stop ends it any time.",
+  moSources: "The subscriber numbers the MOs come from: a list (picked at random), a numeric range, or a prefix followed by random digits.",
+  moDestinations: "The short codes or long numbers the MOs are sent to, one per line, used in turn or at random.",
+  moTemplates: "Message texts, picked by weight. Placeholders: {seq} message number in the run, {rand:N} N random digits, {keyword} a random keyword, {time} the time (UTC).",
+  moLong: "Share of messages sent as long (concatenated) messages of 2 or 3 parts, each with a UDH.",
+  moNoReceiver: "When no RX or TRX session is bound: Queue keeps the MOs (like DLRs, up to 72 hours) and sends them when a receiver binds; Drop discards them and counts them as dropped.",
+  moTest: "Sends one MO right away to a bound RX or TRX session. It is never queued: with no receiver bound it fails.",
+
   // reports
   reportRetention: "Reports come from per-minute totals kept for 180 days. Bind history and message search use raw events, kept for 3 days.",
   ruleMix: "The share of messages each DLR rule entry actually got, against the share configured in the rule. Only messages that reached the rule count: throttled and invalid submit_sm never do.",
@@ -70,7 +82,7 @@ export const GLOSSARY = {
   dlrFailed: "DLRs given up after all retries.",
   licenceThrottled: "submit_sm rejected with ESME_RTHROTTLED because the licence's total TPS was exceeded. Counted from milestone M8 (licensing).",
   bindEvent: "Bound: a bind succeeded. Bind failed: wrong credentials, bind type or too many binds (status is the bind_resp error). Closed: the session ended. Killed: an admin ended it.",
-  messageSearch: "Find a message by the ID the client received in submit_sm_resp (hex) or in the DLR's id: field (hex or decimal), or list recent messages to a destination. Covers the last 3 days.",
+  messageSearch: "Find a message by the ID the client received in submit_sm_resp (hex) or in the DLR's id: field (hex or decimal), or list recent traffic for a number: submit_sm and DLRs to it, and MOs from or to it. Covers the last 3 days.",
 } as const;
 
 export type GlossaryKey = keyof typeof GLOSSARY;

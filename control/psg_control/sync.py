@@ -81,18 +81,26 @@ def worker_online(stores: Stores, worker_id: int) -> bool:
 def command(stores: Stores, worker_id: int, cmd: dict, timeout: float) -> tuple[bool | None, str]:
     """Sends a command to a worker and waits for its reply. Returns (True, ""),
     (False, reason), or (None, reason) if the worker did not answer."""
+    ok, reason, _ = command_reply(stores, worker_id, cmd, timeout)
+    return ok, reason
+
+
+def command_reply(
+    stores: Stores, worker_id: int, cmd: dict, timeout: float
+) -> tuple[bool | None, str, dict]:
+    """Like command, plus the worker's whole reply (e.g. a test MO's message_id)."""
     rid = uuid.uuid4().hex
     try:
         receivers = stores.redis.publish(cmd_channel(worker_id), json.dumps(cmd | {"id": rid}))
         if receivers == 0:
-            return None, "worker is offline"
+            return None, "worker is offline", {}
         reply = stores.redis.blpop([f"psg:reply:{rid}"], timeout=timeout)
     except RedisError as exc:
-        return None, f"redis unavailable ({type(exc).__name__})"
+        return None, f"redis unavailable ({type(exc).__name__})", {}
     if reply is None:
-        return None, "worker did not answer"
+        return None, "worker did not answer", {}
     data = json.loads(reply[1])
-    return bool(data.get("ok")), data.get("error", "")
+    return bool(data.get("ok")), data.get("error", ""), data
 
 
 def port_check(
@@ -122,6 +130,6 @@ def runtime_status(stores: Stores, worker_id: int) -> dict[int, dict]:
 def forget_gateway(stores: Stores, gateway_id: int) -> None:
     """Drops a deleted gateway's persisted DLR queue (best effort)."""
     try:
-        stores.redis.unlink(f"psg:dlrh:{gateway_id}")
+        stores.redis.unlink(f"psg:dlrh:{gateway_id}", f"psg:moprog:{gateway_id}")
     except RedisError as exc:
         log.warning("could not delete DLR queue of gateway %s: %s", gateway_id, type(exc).__name__)

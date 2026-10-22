@@ -16,8 +16,8 @@ behaviour, MO traffic and TPS limit.
 | M4 Events and reports: batched ClickHouse writer with disk spill, per-minute roll-ups, report and message-search API, the panel's Reports and Message search screens | ✅ Done |
 | M5 Panel: login + TOTP, live dashboard, Gateway Manager (list/editor/detail, sessions with kill), DLR Rules with preview, error catalog, Gateway Defaults, workers, settings & audit | ✅ Done |
 | M6 Intermediate DLRs (ENROUTE/ACCEPTD before the final DLR: off, when requested, always) | ✅ Done |
-| M7 MO generator | ⏳ Next |
-| M8 Licensing | ⏳ Not started |
+| M7 MO generator: rate or burst, schedule, sources/destinations, weighted templates, GSM7/UCS2, long messages, queue or drop, Send test MO, MO report | ✅ Done |
+| M8 Licensing | ⏳ Next |
 | M9 Hardening and acceptance | ⏳ Not started |
 | Next phase (deferred from M6): `submit_multi`, `data_sm`, `query_sm`, `cancel_sm`, `replace_sm`; conditional rules; live overrides; response latency | 🕓 Deferred |
 
@@ -77,16 +77,16 @@ Open http://127.0.0.1:8080/ and sign in as `admin` with the `PSG_ADMIN_PASSWORD`
 |---|---|
 | Dashboard | Live submit/throttle/reject and DLR rates (2 s refresh), sessions, listener state, worker DLR backlog |
 | Gateway Manager | List, search, filter; create and edit (Connection / DLR Settings / Limits tabs). Connection picks the DLR Rule and checks the port (next free port suggested); the port of a running gateway is locked until you stop it. DLR Settings and Limits follow Gateway Defaults until you change a field; **Set default** reverts the tab |
-| Gateway detail | Live chart, bound sessions with **Kill**, password reveal, effective settings, DLR rule entries, change history, enable/disable/delete |
+| Gateway detail | Live chart, bound sessions with **Kill**, password reveal, effective settings, DLR rule entries, **MO traffic** (settings, Start/Stop, Send test MO), change history, enable/disable/delete |
 | DLR Rules | Rules with Fixed / Random / Weighted modes, exact or probabilistic distribution, seed, and a 10,000-message preview. Fixed rules have exactly one entry |
 | Error catalog | DLR `err:` codes (system + custom, strictly numeric), SMPP command statuses (+ vendor 0x400–0x4FF), DLR statuses |
 | Gateway Defaults | The default DLR Rule, DLR Settings and Limits every gateway follows |
 | Workers | Registry, rename, drain/activate, remove offline workers |
 | Settings & audit | Change password, turn on TOTP (QR code), audit log of every change |
-| Reports | Traffic (submit_sm and DLRs by result, per gateway), DLR rule mix actual vs configured, DLR delay distribution, throttling, bind history; 1 h to 30 days; CSV export |
-| Message search | A message's submit_sm and DLR events by message ID (hex or decimal), or recent messages to a destination |
+| Reports | Traffic (submit_sm and DLRs by result, per gateway), DLR rule mix actual vs configured, DLR delay distribution, throttling, MO traffic, bind history; 1 h to 30 days; CSV export |
+| Message search | A message's submit_sm, DLR and MO events by message ID (hex or decimal), or recent traffic for a number |
 
-MO, Live overrides and Licence appear in the menu with the milestone that delivers them.
+Licence appears in the menu with the milestone that delivers it.
 
 ## Manage gateways (REST API)
 
@@ -229,10 +229,33 @@ full gate (25k TPS for 60 min, 50k TPS for 10 min) still needs a dedicated host:
 earlier 50k run on this shared server had one 5 s window with a ~50 ms stall, which
 GC traces ruled out as the cause.
 
+## MO traffic
+
+Each gateway can send mobile-originated messages to its own RX and TRX sessions
+(`deliver_sm`, `esm_class` 0x00, or 0x40 with a UDH for long messages). Set it up on the
+gateway page under **MO traffic**:
+
+| Setting | Meaning |
+|---|---|
+| Mode | **Steady rate** (messages per second, within ±2%) or **Burst** (N messages as fast as the receivers take them) |
+| Start at, Stop after | Optional start time; stop after a duration and/or a number of messages. **Stop** ends a run any time; every **Start** begins a new run from zero. A worker restart resumes the run where it was |
+| Source numbers | A list, a numeric range, or a prefix plus random digits |
+| Destinations | Short codes or long numbers, used in turn or at random |
+| Texts | Weighted templates with `{seq}`, `{rand:N}`, `{keyword}` and `{time}` (UTC) |
+| Encoding, long messages | GSM7 (unpacked, `data_coding` 0) or UCS2 (`data_coding` 8); a share sent as 2–3 concatenated parts. Each part counts as one message |
+| No receiver bound | **Queue** (kept like DLRs, up to 72 h, persisted to Redis) or **Drop** |
+
+**Send test MO** sends one message right away and fails if no receiver is bound. MO uses
+the same 1,000-PDU window, retries and queue as DLRs, does not count against the gateway's
+`submit_sm` TPS limit, and is recorded in `mo_events` (Reports → MO traffic, Message
+search). API: `GET/PUT /api/v1/gateways/{id}/mo`, `POST …/mo/start`, `…/mo/stop`,
+`…/mo/test`.
+
 ## Events and reports
 
-Every worker records one ClickHouse row per `submit_sm` (any result), per DLR outcome
-(acknowledged, retried, failed, queued, expired) and per bind, failed bind, close or kill.
+Every worker records one ClickHouse row per `submit_sm` (any result), per DLR or MO outcome
+(acknowledged, retried, failed, queued, expired; MO also dropped) and per bind, failed bind,
+close or kill.
 Rows are batched (every second or 10,000 rows) and sent as RowBinary over HTTP. The hot
 path only appends to an in-memory buffer; if the writer falls behind by more than 500,000
 rows per table, rows are dropped and counted in `psg_events_total{result="dropped"}`, never
@@ -240,8 +263,8 @@ blocking SMPP traffic.
 
 | What | Kept | Used by |
 |---|---|---|
-| Raw events (`submit_events`, `dlr_events`, `session_events`) | 3 days | Bind history, Message search |
-| Per-minute roll-ups (`submit_minute`, `dlr_minute`) | 180 days | Traffic, DLR rule mix, DLR delay, Throttling |
+| Raw events (`submit_events`, `dlr_events`, `mo_events`, `session_events`) | 3 days | Bind history, Message search |
+| Per-minute roll-ups (`submit_minute`, `dlr_minute`, `mo_minute`) | 180 days | Traffic, DLR rule mix, DLR delay, Throttling, MO traffic |
 
 The control plane applies the DDL in [control/clickhouse/](control/clickhouse/) on startup
 (retrying until ClickHouse is up). If ClickHouse is down, the worker writes batches to
@@ -255,7 +278,7 @@ platform on a host short of memory. Reports then show nothing new.
 
 Report API (admin session; every endpoint takes `from`, `to`, `format=json|csv`):
 `GET /api/v1/reports/traffic`, `/reports/outcomes?gateway_id=`, `/reports/dlr-delay`,
-`/reports/binds`, `/messages?message_id=` or `?destination=`.
+`/reports/mo`, `/reports/binds`, `/messages?message_id=` or `?destination=`.
 
 ## Using the MariaDB, Redis and ClickHouse already on the host
 

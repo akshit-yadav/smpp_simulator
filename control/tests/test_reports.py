@@ -44,7 +44,8 @@ def window(base):
 @needs_clickhouse
 def test_schema_is_applied_once(ch):
     assert migrate(ch) == []
-    assert ch.execute("SELECT name FROM psg_schema").strip() == "001_events.sql"
+    names = ch.execute("SELECT name FROM psg_schema ORDER BY version").split()
+    assert names == ["001_events.sql", "002_mo.sql"]
 
 
 @needs_clickhouse
@@ -286,6 +287,50 @@ def test_message_search(admin, ch, base):
         == 422
     )
     assert admin.get("/api/v1/messages", params={"message_id": "xyz"}).status_code == 422
+
+
+@needs_clickhouse
+def test_mo_report_and_search(admin, ch, base):
+    insert(
+        ch,
+        "mo_events",
+        [
+            {
+                "ts": at(base, 1),
+                "gateway_id": 1,
+                "message_id": 0xA1,
+                "source_addr": "919800000009",
+                "dest_addr": "56161",
+                "result": "acknowledged",
+            },
+            {
+                "ts": at(base, 2),
+                "gateway_id": 1,
+                "message_id": 0xA2,
+                "source_addr": "919800000009",
+                "dest_addr": "56161",
+                "result": "acknowledged",
+                "test": 1,
+            },
+            {
+                "ts": at(base, 3),
+                "gateway_id": 1,
+                "message_id": 0xA3,
+                "source_addr": "919800000008",
+                "dest_addr": "56161",
+                "result": "dropped",
+            },
+        ],
+    )
+    rows = admin.get("/api/v1/reports/mo", params=window(base) | {"step": 60}).json()["rows"]
+    assert [(r["acknowledged"], r["dropped"], r["test"]) for r in rows] == [(2, 1, 1)]
+
+    by_number = admin.get("/api/v1/messages", params={"destination": "919800000009"}).json()
+    assert sorted(m["message_id"] for m in by_number["mos"]) == ["a1", "a2"]
+    by_code = admin.get("/api/v1/messages", params={"destination": "56161"}).json()
+    assert len(by_code["mos"]) == 3
+    by_id = admin.get("/api/v1/messages", params={"message_id": "a3"}).json()
+    assert [m["result"] for m in by_id["mos"]] == ["dropped"]
 
 
 @needs_stores

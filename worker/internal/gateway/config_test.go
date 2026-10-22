@@ -71,3 +71,26 @@ func TestSecretNeverPrints(t *testing.T) {
 		t.Fatalf("password leaked: %s", out)
 	}
 }
+
+// The "mo" object exactly as the control plane's resolve.mo_config writes it.
+func TestDecodeMOFromControlPlane(t *testing.T) {
+	raw := `{"id": 3, "name": "g", "port": 20001, "system_id": "s", "password": "p", "status": "active",
+	  "mo": {"enabled": true, "run_id": 2, "mode": "rate", "rate": 12.5, "burst": 100,
+	    "stop_after_s": 60, "stop_after_count": 0,
+	    "sources": {"kind": "range", "list": [], "from": "0919800000000", "to": "0919800009999", "prefix": "", "digits": 0},
+	    "destinations": ["56161"], "dest_order": "random",
+	    "templates": [{"text": "STOP {rand:4}", "weight": 3}], "keywords": ["HELP"],
+	    "encoding": "ucs2", "long_pct": 10, "no_receiver": "drop", "start_at": "2026-10-22T04:30:00Z"}}`
+	c, err := Decode(Builtin, []byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c.MO
+	if m == nil || !m.Enabled || m.RunID != 2 || m.Rate != 12.5 || m.Sources.From != "0919800000000" ||
+		m.Templates[0].Weight != 3 || m.NoReceiver != MODrop || m.StartAt == nil || m.StartAt.Hour() != 4 {
+		t.Fatalf("decoded %+v", m)
+	}
+	if c2, _ := Decode(Builtin, []byte(`{"id": 3, "name": "g", "port": 20001, "system_id": "s"}`)); c2.MO != nil {
+		t.Fatal("a gateway without MO settings must have none")
+	}
+}

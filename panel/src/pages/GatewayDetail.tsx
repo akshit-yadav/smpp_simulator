@@ -4,6 +4,7 @@ import { revealPassword, useAudit, useDefaults, useDeleteGateway, useGateway, us
 import type { Defaults, Gateway, SettingKey } from "../api/types";
 import { LineChart } from "../components/charts";
 import { RuntimeBadge } from "../components/GatewayBadges";
+import MoCard from "../components/MoCard";
 import { useToast } from "../components/toast";
 import { Badge, Card, ConfirmButton, Empty, ErrorBox, Loading, PageHead, Term, errorMessage } from "../components/ui";
 import { fmtAgo, fmtDuration, fmtMs, fmtNum, fmtRate, fmtTime, hex } from "../lib/format";
@@ -380,6 +381,8 @@ export default function GatewayDetail() {
             <Loading />
           )}
         </Card>
+
+        <MoCard gatewayId={g.id} active={g.status === "active"} />
 
         <Card title="Live overrides">
           <Empty title="Planned for a later phase">

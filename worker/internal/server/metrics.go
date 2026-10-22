@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/events"
 )
 
 // Stats are one gateway's counters. The Manager keeps them by gateway ID, so
@@ -15,6 +17,43 @@ type Stats struct {
 	DLRSent, DLRAck, DLRRetried, DLRFailed, DLRQueued atomic.Uint64
 	DLRExpired, BindOK, BindFail                      atomic.Uint64
 	SessionsTX, SessionsRX, SessionsTRX               atomic.Int64
+
+	MOSent, MOAck, MORetried, MOFailed, MOQueued, MOExpired, MODropped atomic.Uint64
+	MOState                                                            atomic.Int32 // moStopped...moFinished
+	MORunID, MORunSent                                                 atomic.Int64 // current run and its parts sent
+}
+
+// countDelivery bumps the DLR or MO counter for a delivery result.
+func (s *Stats) countDelivery(j *dlrJob, r events.DLRResult) {
+	mo := j.isMO()
+	pick := func(m, d *atomic.Uint64) *atomic.Uint64 {
+		if mo {
+			return m
+		}
+		return d
+	}
+	switch r {
+	case events.DLRAcknowledged:
+		pick(&s.MOAck, &s.DLRAck).Add(1)
+	case events.DLRRetried:
+		pick(&s.MORetried, &s.DLRRetried).Add(1)
+	case events.DLRFailed:
+		pick(&s.MOFailed, &s.DLRFailed).Add(1)
+	case events.DLRQueued:
+		pick(&s.MOQueued, &s.DLRQueued).Add(1)
+	case events.DLRExpired:
+		pick(&s.MOExpired, &s.DLRExpired).Add(1)
+	case events.MODropped:
+		s.MODropped.Add(1)
+	}
+}
+
+func (s *Stats) countSent(j *dlrJob) {
+	if j.isMO() {
+		s.MOSent.Add(1)
+	} else {
+		s.DLRSent.Add(1)
+	}
 }
 
 // Sessions returns the bound-session gauge for a bind type.
@@ -43,6 +82,21 @@ type StatsSnapshot struct {
 	BindOK     uint64           `json:"bind_ok"`
 	BindFail   uint64           `json:"bind_failed"`
 	Sessions   map[string]int64 `json:"sessions"`
+	MO         MOSnapshot       `json:"mo"`
+}
+
+// MOSnapshot is the MO generator's state and cumulative MO counters.
+type MOSnapshot struct {
+	State   string `json:"state"` // stopped | scheduled | running | finished
+	RunID   int64  `json:"run_id"`
+	RunSent int64  `json:"run_sent"` // parts sent in the current run
+	Sent    uint64 `json:"sent"`
+	Ack     uint64 `json:"acknowledged"`
+	Retried uint64 `json:"retried"`
+	Failed  uint64 `json:"failed"`
+	Queued  uint64 `json:"queued"`
+	Expired uint64 `json:"expired"`
+	Dropped uint64 `json:"dropped"`
 }
 
 func (s *Stats) Snapshot() StatsSnapshot {
@@ -54,13 +108,18 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		Sessions: map[string]int64{
 			"tx": s.SessionsTX.Load(), "rx": s.SessionsRX.Load(), "trx": s.SessionsTRX.Load(),
 		},
+		MO: MOSnapshot{
+			State: moStateNames[s.MOState.Load()], RunID: s.MORunID.Load(), RunSent: s.MORunSent.Load(),
+			Sent: s.MOSent.Load(), Ack: s.MOAck.Load(), Retried: s.MORetried.Load(), Failed: s.MOFailed.Load(),
+			Queued: s.MOQueued.Load(), Expired: s.MOExpired.Load(), Dropped: s.MODropped.Load(),
+		},
 	}
 }
 
 // collector exposes every gateway's Stats to Prometheus at scrape time.
 type collector struct {
-	m                         *Manager
-	submits, dlrs, binds, ses *prometheus.Desc
+	m                              *Manager
+	submits, dlrs, mos, binds, ses *prometheus.Desc
 }
 
 func newCollector(m *Manager) *collector {
@@ -69,6 +128,7 @@ func newCollector(m *Manager) *collector {
 		m:       m,
 		submits: prometheus.NewDesc("psg_submit_total", "submit_sm received, by result.", labels, nil),
 		dlrs:    prometheus.NewDesc("psg_dlr_total", "DLR events, by result.", labels, nil),
+		mos:     prometheus.NewDesc("psg_mo_total", "MO deliver_sm events, by result.", labels, nil),
 		binds:   prometheus.NewDesc("psg_bind_total", "Bind attempts, by result.", labels, nil),
 		ses:     prometheus.NewDesc("psg_sessions", "Bound SMPP sessions.", []string{"gateway", "bind_type"}, nil),
 	}
@@ -77,6 +137,7 @@ func newCollector(m *Manager) *collector {
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.submits
 	ch <- c.dlrs
+	ch <- c.mos
 	ch <- c.binds
 	ch <- c.ses
 }
@@ -97,6 +158,13 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		count(c.dlrs, s.DLRFailed, "failed")
 		count(c.dlrs, s.DLRQueued, "queued")
 		count(c.dlrs, s.DLRExpired, "expired")
+		count(c.mos, s.MO.Sent, "sent")
+		count(c.mos, s.MO.Ack, "acknowledged")
+		count(c.mos, s.MO.Retried, "retried")
+		count(c.mos, s.MO.Failed, "failed")
+		count(c.mos, s.MO.Queued, "queued")
+		count(c.mos, s.MO.Expired, "expired")
+		count(c.mos, s.MO.Dropped, "dropped")
 		count(c.binds, s.BindOK, "ok")
 		count(c.binds, s.BindFail, "failed")
 		for bt, n := range s.Sessions {
