@@ -14,11 +14,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/events"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/msgid"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/outcome"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/ratelimit"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/timewheel"
+	"github.com/akshit-yadav/smpp_simulator/worker/pkg/smpp/pdu"
 )
 
 type Options struct {
@@ -28,6 +30,7 @@ type Options struct {
 	Redis       *redis.Client // nil: DLR queue is memory-only
 	Registerer  prometheus.Registerer
 	Log         *slog.Logger
+	Events      *events.Recorder // nil: no events
 
 	BindTimeout time.Duration // close if not bound in time
 	IdleTimeout time.Duration // close a bound session with no traffic
@@ -63,11 +66,12 @@ func (o *Options) defaults() {
 const wheelTick = 5 * time.Millisecond
 
 type Manager struct {
-	opt   Options
-	log   *slog.Logger
-	ids   *msgid.Generator
-	wheel *timewheel.Wheel[*dlrJob]
-	queue *dlrQueue
+	opt    Options
+	log    *slog.Logger
+	events *events.Recorder
+	ids    *msgid.Generator
+	wheel  *timewheel.Wheel[*dlrJob]
+	queue  *dlrQueue
 
 	mu       sync.Mutex // serialises Apply and shutdown
 	gateways map[int64]*Gateway
@@ -81,6 +85,7 @@ func NewManager(opt Options) *Manager {
 	m := &Manager{
 		opt:      opt,
 		log:      opt.Log,
+		events:   opt.Events,
 		ids:      msgid.New(opt.WorkerID),
 		wheel:    timewheel.New[*dlrJob](wheelTick, time.Now()),
 		gateways: map[int64]*Gateway{},
@@ -295,6 +300,7 @@ func (m *Manager) drainQueues() {
 		for _, j := range m.queue.pop(id, 5000) {
 			if now.Sub(j.QueuedAt) > m.opt.QueueMaxAge {
 				gw.stats.DLRExpired.Add(1)
+				m.recordQueued(j, events.DLRExpired)
 				continue
 			}
 			m.dispatch(j)
@@ -397,6 +403,7 @@ func (m *Manager) KillSession(id uint64) bool {
 	for _, s := range m.boundSessions() {
 		if s.id == id {
 			m.log.Info("session killed by admin", "gateway_id", s.gw.id, "session", id, "remote", s.remote)
+			s.recordSession(events.SessionKilled, s.bindType, s.systemID, pdu.ESME_ROK)
 			s.unbindAndClose()
 			return true
 		}

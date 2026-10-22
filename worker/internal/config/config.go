@@ -18,22 +18,27 @@ type PortRange struct {
 func (r PortRange) String() string { return fmt.Sprintf("%d-%d", r.Min, r.Max) }
 
 type Config struct {
-	WorkerID      uint8
-	WorkerIP      string
-	MetricsAddr   string
-	ControlURL    string
-	InternalToken string
-	RedisAddr     string
-	RedisPassword string
-	RedisDB       int
-	PortRange     PortRange
-	PortExclude   []int
-	SpillDir      string
-	SpillMaxBytes int64
-	LogLevel      slog.Level
-	GatewaysFile  string // static gateway file; empty = get gateways from the control plane
-	ConfigCache   string // last config received from the control plane
-	ListenHost    string // "" = all interfaces
+	WorkerID       uint8
+	WorkerIP       string
+	MetricsAddr    string
+	ControlURL     string
+	InternalToken  string
+	RedisAddr      string
+	RedisPassword  string
+	RedisDB        int
+	PortRange      PortRange
+	PortExclude    []int
+	SpillDir       string
+	SpillMaxBytes  int64
+	EventsEnabled  bool   // write submit/DLR/session events to ClickHouse
+	ClickHouseURL  string // HTTP interface
+	ClickHouseDB   string
+	ClickHouseUser string
+	ClickHouseKey  string
+	LogLevel       slog.Level
+	GatewaysFile   string // static gateway file; empty = get gateways from the control plane
+	ConfigCache    string // last config received from the control plane
+	ListenHost     string // "" = all interfaces
 }
 
 // PortAllowed checks a gateway port against the range and exclusion list.
@@ -83,6 +88,14 @@ func Load() (Config, error) {
 	if c.SpillMaxBytes, err = strconv.ParseInt(env("PSG_SPILL_MAX_BYTES", "5368709120"), 10, 64); err != nil {
 		return c, fmt.Errorf("PSG_SPILL_MAX_BYTES: %w", err)
 	}
+
+	if c.EventsEnabled, err = strconv.ParseBool(env("PSG_EVENTS_ENABLED", "true")); err != nil {
+		return c, fmt.Errorf("PSG_EVENTS_ENABLED: %w", err)
+	}
+	c.ClickHouseURL = "http://" + net.JoinHostPort(env("PSG_CLICKHOUSE_HOST", "127.0.0.1"), env("PSG_CLICKHOUSE_HTTP_PORT", "8123"))
+	c.ClickHouseDB = env("PSG_CLICKHOUSE_DATABASE", "psg")
+	c.ClickHouseUser = env("PSG_CLICKHOUSE_USER", "default")
+	c.ClickHouseKey = env("PSG_CLICKHOUSE_PASSWORD", "")
 
 	c.GatewaysFile = env("PSG_GATEWAYS_FILE", "")
 	c.ConfigCache = env("PSG_CONFIG_CACHE", "/var/lib/psg/config-cache.json")

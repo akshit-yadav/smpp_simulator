@@ -57,6 +57,17 @@ export const GLOSSARY = {
   dlrsInFlight: "DLRs sent on this session that the client has not acknowledged with deliver_sm_resp yet.",
   workerDrain: "A draining worker keeps running its gateways but accepts no new ones. Move its gateways away before taking it down.",
   configVersion: "Increases on every change. Workers compare it every 60 seconds to make sure they run the latest settings.",
+
+  // reports
+  reportRetention: "Reports come from per-minute totals kept for 180 days. Bind history and message search use raw events, kept for 3 days.",
+  ruleMix: "The share of messages each DLR rule entry actually got, against the share configured in the rule. Only messages that reached the rule count: throttled and invalid submit_sm never do.",
+  dlrDelay: "Time from accepting a submit_sm to sending its DLR (deliver_sm), for DLRs the client acknowledged. Includes retry backoff if a first attempt failed.",
+  dlrAcknowledged: "DLRs the client answered with deliver_sm_resp ESME_ROK.",
+  dlrRetried: "DLRs sent again after an error deliver_sm_resp or no answer within 30 s (up to 5 times, with backoff).",
+  dlrFailed: "DLRs given up after all retries.",
+  licenceThrottled: "submit_sm rejected with ESME_RTHROTTLED because the licence's total TPS was exceeded. Counted from milestone M8 (licensing).",
+  bindEvent: "Bound: a bind succeeded. Bind failed: wrong credentials, bind type or too many binds (status is the bind_resp error). Closed: the session ended. Killed: an admin ended it.",
+  messageSearch: "Find a message by the ID the client received in submit_sm_resp (hex) or in the DLR's id: field (hex or decimal), or list recent messages to a destination. Covers the last 3 days.",
 } as const;
 
 export type GlossaryKey = keyof typeof GLOSSARY;

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"github.com/linxGnu/gosmpp/data"
 	gpdu "github.com/linxGnu/gosmpp/pdu"
 
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/chtest"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/events"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/outcome"
 	"github.com/akshit-yadav/smpp_simulator/worker/pkg/smpp/pdu"
@@ -41,7 +44,13 @@ func testConfig(t *testing.T) gateway.Config {
 
 func startManager(t *testing.T, cfgs ...gateway.Config) *Manager {
 	t.Helper()
-	m := NewManager(Options{ListenHost: "127.0.0.1", DLRTimeout: 2 * time.Second})
+	return startManagerWith(t, Options{}, cfgs...)
+}
+
+func startManagerWith(t *testing.T, opt Options, cfgs ...gateway.Config) *Manager {
+	t.Helper()
+	opt.ListenHost, opt.DLRTimeout = "127.0.0.1", 2*time.Second
+	m := NewManager(opt)
 	for _, r := range m.Apply(cfgs) {
 		if r.Err != nil {
 			t.Fatal(r.Err)
@@ -544,5 +553,52 @@ func TestSessionsKillAndStats(t *testing.T) {
 			t.Fatal("session still bound after kill")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestEventsReachClickHouse(t *testing.T) {
+	db := "psg_server_events_test"
+	chURL := chtest.DB(t, db)
+	rec, err := events.New(events.Options{WorkerID: 1, URL: chURL, Database: db, SpillDir: t.TempDir(), SpillMaxBytes: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recCtx, stopRec := context.WithCancel(context.Background())
+	recDone := make(chan struct{})
+	go func() { rec.Run(recCtx); close(recDone) }()
+
+	c := testConfig(t)
+	m := startManagerWith(t, Options{Events: rec}, c)
+	if _, err := bind(t, c, "tx", c.SystemID, "wrong"); err == nil {
+		t.Fatal("bind with a wrong password succeeded")
+	}
+	cl := mustBind(t, c, "trx")
+	cl.submit(t, newSubmit(t, "hello", 1))
+	r := waitResp(t, cl)
+	waitDLR(t, cl, 2*time.Second)
+	for deadline := time.Now().Add(3 * time.Second); m.StatsSnapshot()[1].DLRAck == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("deliver_sm_resp not received")
+		}
+	}
+	_ = cl.sess.Close()
+	for deadline := time.Now().Add(3 * time.Second); len(m.Sessions()) > 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("session still bound")
+		}
+	}
+	stopRec()
+	<-recDone
+
+	id, _ := strconv.ParseUint(r.MessageID, 16, 64)
+	want := map[string]string{
+		"SELECT result, message_id, source_addr, dest_addr, system_id, outcome, dlr_status, sm_length FROM submit_events": fmt.Sprintf("accepted\t%d\tHEXWIRE\t919812345678\tvendora\tdelivered\tDELIVRD\t5", id),
+		"SELECT result, message_id, attempt, dlr_status, delay_ms BETWEEN 100 AND 1000 FROM dlr_events":                   fmt.Sprintf("acknowledged\t%d\t1\tDELIVRD\t1", id),
+		"SELECT groupArray(toString(event)), groupArray(status) FROM (SELECT * FROM session_events ORDER BY ts)":          "['bind_failed','bound','closed']\t[14,0,0]",
+	}
+	for q, w := range want {
+		if got := chtest.Query(t, chURL, db, q); got != w {
+			t.Errorf("%s\n got %q\nwant %q", q, got, w)
+		}
 	}
 }

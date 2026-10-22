@@ -2,10 +2,10 @@
 
 import logging
 
-import httpx
 import redis
 from sqlalchemy import Engine, create_engine, text
 
+from psg_control.clickhouse import ClickHouse
 from psg_control.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -31,11 +31,12 @@ class Stores:
             socket_connect_timeout=CHECK_TIMEOUT_S,
             decode_responses=True,
         )
-        self.clickhouse_url = f"http://{settings.clickhouse_host}:{settings.clickhouse_http_port}"
+        self.clickhouse = ClickHouse(settings)
 
     def close(self) -> None:
         self.db.dispose()
         self.redis.close()
+        self.clickhouse.close()
 
     def check_all(self) -> dict[str, str]:
         return {
@@ -49,7 +50,7 @@ class Stores:
             conn.execute(text("SELECT 1"))
 
     def _check_clickhouse(self) -> None:
-        resp = httpx.get(f"{self.clickhouse_url}/ping", timeout=CHECK_TIMEOUT_S)
+        resp = self.clickhouse.client.get(f"{self.clickhouse.url}ping", timeout=CHECK_TIMEOUT_S)
         resp.raise_for_status()
 
     @staticmethod

@@ -9,8 +9,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/events"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/msgid"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/outcome"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/ratelimit"
 	"github.com/akshit-yadav/smpp_simulator/worker/pkg/smpp/pdu"
 )
@@ -186,6 +188,7 @@ func (s *Session) handleBind(p pdu.Packet) bool {
 	if status != pdu.ESME_ROK {
 		s.gw.stats.BindFail.Add(1)
 		log.Warn("bind rejected", "status", status.String())
+		s.recordSession(events.SessionBindFailed, bt, b.SystemID, status)
 		s.respond(resp, status, p.Sequence, failedBindBody(resp))
 		s.flushAndClose()
 		return false
@@ -204,6 +207,7 @@ func (s *Session) handleBind(p pdu.Packet) bool {
 		s.gw.addReceiver(s)
 	}
 	log.Info("bound")
+	s.recordSession(events.SessionBound, bt, b.SystemID, pdu.ESME_ROK)
 	return true
 }
 
@@ -220,6 +224,7 @@ func (s *Session) handleSubmit(p pdu.Packet) {
 	s.submits.Add(1)
 	if s.bindType == gateway.BindRX {
 		s.respond(pdu.SubmitSMResp, pdu.ESME_RINVBNDSTS, p.Sequence, nil)
+		s.recordSubmit(nil, events.SubmitRejected, pdu.ESME_RINVBNDSTS, nil, 0)
 		return
 	}
 	rc := s.gw.config()
@@ -231,7 +236,9 @@ func (s *Session) handleSubmit(p pdu.Packet) {
 	sm, err := pdu.DecodeSM(p.Body)
 	if err != nil {
 		s.gw.stats.Invalid.Add(1)
-		s.respond(pdu.SubmitSMResp, submitDecodeStatus(err), p.Sequence, nil)
+		status := submitDecodeStatus(err)
+		s.respond(pdu.SubmitSMResp, status, p.Sequence, nil)
+		s.recordSubmit(nil, events.SubmitInvalid, status, nil, 0)
 		return
 	}
 
@@ -242,6 +249,7 @@ func (s *Session) handleSubmit(p pdu.Packet) {
 	if !bucket.Allow() {
 		s.gw.stats.Throttled.Add(1)
 		s.respond(pdu.SubmitSMResp, pdu.ESME_RTHROTTLED, p.Sequence, nil)
+		s.recordSubmit(&sm, events.SubmitThrottled, pdu.ESME_RTHROTTLED, nil, 0)
 		return
 	}
 
@@ -249,6 +257,7 @@ func (s *Session) handleSubmit(p pdu.Packet) {
 	if !o.Accepted() {
 		s.gw.stats.Rejected.Add(1)
 		s.respond(pdu.SubmitSMResp, o.CommandStatus, p.Sequence, nil)
+		s.recordSubmit(&sm, events.SubmitRejected, o.CommandStatus, o, 0)
 		return
 	}
 
@@ -257,7 +266,35 @@ func (s *Session) handleSubmit(p pdu.Packet) {
 	hexID := msgid.Hex(id)
 	s.respond(pdu.SubmitSMResp, pdu.ESME_ROK, p.Sequence, pdu.MessageIDResp{MessageID: hexID}.Append(nil))
 	s.gw.stats.Accepted.Add(1)
+	s.recordSubmit(&sm, events.SubmitAccepted, pdu.ESME_ROK, o, id)
 	s.m.scheduleDLR(rc, &sm, id, o, now)
+}
+
+// recordSubmit emits a submit_events row; sm is nil if the PDU did not decode.
+func (s *Session) recordSubmit(sm *pdu.SM, result events.SubmitResult, status pdu.Status, o *outcome.Outcome, id uint64) {
+	if s.m.events == nil {
+		return
+	}
+	e := events.Submit{
+		TS: time.Now(), GatewayID: s.gw.id, SessionID: s.id, SystemID: s.systemID,
+		MessageID: id, Result: result, Status: uint32(status),
+	}
+	if sm != nil {
+		e.Src, e.Dst = sm.SourceAddr, sm.DestAddr
+		e.RegisteredDelivery, e.DataCoding = sm.RegisteredDelivery, sm.DataCoding
+		e.SMLength = uint16(min(len(sm.Message()), 0xFFFF))
+	}
+	if o != nil {
+		e.Outcome, e.DLRStatus, e.DLRError = o.Name, o.DLRStatus, o.DLRError
+	}
+	s.m.events.Submit(e)
+}
+
+func (s *Session) recordSession(ev events.SessionEvent, bindType, systemID string, status pdu.Status) {
+	s.m.events.Session(events.Session{
+		TS: time.Now(), GatewayID: s.gw.id, SessionID: s.id, Event: ev, BindType: bindType,
+		SystemID: systemID, Remote: s.remote, Status: uint32(status), Submits: s.submits.Load(),
+	})
 }
 
 func submitDecodeStatus(err error) pdu.Status {
@@ -354,6 +391,7 @@ func (s *Session) close() {
 		s.gw.removeSession(s, wasBound)
 		if wasBound {
 			s.gw.stats.Sessions(s.bindType).Add(-1)
+			s.recordSession(events.SessionClosed, s.bindType, s.systemID, pdu.ESME_ROK)
 		}
 		s.requeueDLRs()
 		s.m.log.Info("session closed", "gateway_id", s.gw.id, "session", s.id, "remote", s.remote, "bound", wasBound)

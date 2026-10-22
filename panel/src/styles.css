@@ -950,3 +950,65 @@ dl.kv dd {
   gap: 12px;
   flex-wrap: wrap;
 }
+
+/* ---- reports & message search ---------------------------------------------------- */
+.spacer {
+  flex: 1;
+}
+.nowrap {
+  white-space: nowrap;
+}
+.grid-2-1 {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  align-items: start;
+}
+@media (max-width: 1000px) {
+  .grid-2-1 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.tile-value.small-value {
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+.linklike {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  font: inherit;
+}
+th .legend {
+  margin: 0;
+  font-weight: normal;
+}
+/* Rule mix: the bar is the actual share, the tick the configured share. */
+.mix-bar {
+  position: relative;
+  height: 10px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  min-width: 120px;
+}
+.mix-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--series-1);
+}
+.mix-marker {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.mix-marker-key {
+  display: inline-block;
+  width: 2px;
+  height: 12px;
+  background: var(--text);
+}

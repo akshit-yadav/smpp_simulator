@@ -13,7 +13,7 @@ behaviour, MO traffic and TPS limit.
 | M1 Worker core: SMPP 3.4 codec, bind auth, `submit_sm`, `enquire_link`, `unbind`, many listeners | ✅ Done |
 | M2 Hot path: outcome engine, TPS limits, timing-wheel DLRs, DLR delivery/queue/retry, load generator | ✅ Done (short benchmark runs, see below) |
 | M3 Control plane: admin login + TOTP, audit log, gateway/DLR rule/catalog/defaults API, 3-layer port check, config sync, worker registry | ✅ Done. Manage gateways through the REST API (Swagger UI at `/api/docs`) |
-| M4 Events and reports (ClickHouse); the panel's Reports and Message search screens | ⏳ Next |
+| M4 Events and reports: batched ClickHouse writer with disk spill, per-minute roll-ups, report and message-search API, the panel's Reports and Message search screens | ✅ Done |
 | M5 Panel: login + TOTP, live dashboard, Gateway Manager (list/editor/detail, sessions with kill), DLR Rules with preview, error catalog, Gateway Defaults, workers, settings & audit | ✅ Done |
 | M6–M9 `submit_multi`/`data_sm`/`query_sm`…, overrides, MO, licensing, hardening | ⏳ Not started |
 
@@ -79,9 +79,10 @@ Open http://127.0.0.1:8080/ and sign in as `admin` with the `PSG_ADMIN_PASSWORD`
 | Gateway Defaults | The default DLR Rule, DLR Settings and Limits every gateway follows |
 | Workers | Registry, rename, drain/activate, remove offline workers |
 | Settings & audit | Change password, turn on TOTP (QR code), audit log of every change |
+| Reports | Traffic (submit_sm and DLRs by result, per gateway), DLR rule mix actual vs configured, DLR delay distribution, throttling, bind history; 1 h to 30 days; CSV export |
+| Message search | A message's submit_sm and DLR events by message ID (hex or decimal), or recent messages to a destination |
 
-Reports, Message search, MO, Live overrides and Licence appear in the menu with the
-milestone that delivers them.
+MO, Live overrides and Licence appear in the menu with the milestone that delivers them.
 
 ## Manage gateways (REST API)
 
@@ -208,10 +209,46 @@ weighted outcomes, `psg-loadgen` on the same host:
 | 25,000 TPS | 30 s | 749,975 | 0 | 85 µs / 475 µs / 1.3 ms | 100% | 1,988 ms |
 | 50,000 TPS | 30 s | 1,499,950 | 0 | 121 µs / 878 µs / 1.6 ms | 100% | 1,988 ms |
 
+With events on (M4), same host, one ClickHouse on the same 8 vCPU:
+
+| 25,000 TPS, 30 s | `submit_sm_resp` p50 / p99 / p99.9 | Worker CPU | Worker peak RSS | Events written |
+|---|---|---|---|---|
+| Events off | 97 µs / 525 µs / 1.6 ms | 12 s | 44 MB | – |
+| Events on, ClickHouse up | 101 µs / 779 µs / 2.7 ms | 14 s | 60 MB | 1.5 M rows, 0 dropped |
+| Events on, ClickHouse down (spilling) | 101 µs / 628 µs / 4.6 ms | 14 s | 60 MB | 1.5 M rows to disk (124 MB), replayed in ~4 s |
+
 The worker used under one CPU core at 50k TPS, and GC pauses stayed under 1 ms. The brief's
 full gate (25k TPS for 60 min, 50k TPS for 10 min) still needs a dedicated host: an
 earlier 50k run on this shared server had one 5 s window with a ~50 ms stall, which
 GC traces ruled out as the cause.
+
+## Events and reports
+
+Every worker records one ClickHouse row per `submit_sm` (any result), per DLR outcome
+(acknowledged, retried, failed, queued, expired) and per bind, failed bind, close or kill.
+Rows are batched (every second or 10,000 rows) and sent as RowBinary over HTTP. The hot
+path only appends to an in-memory buffer; if the writer falls behind by more than 500,000
+rows per table, rows are dropped and counted in `psg_events_total{result="dropped"}`, never
+blocking SMPP traffic.
+
+| What | Kept | Used by |
+|---|---|---|
+| Raw events (`submit_events`, `dlr_events`, `session_events`) | 3 days | Bind history, Message search |
+| Per-minute roll-ups (`submit_minute`, `dlr_minute`) | 180 days | Traffic, DLR rule mix, DLR delay, Throttling |
+
+The control plane applies the DDL in [control/clickhouse/](control/clickhouse/) on startup
+(retrying until ClickHouse is up). If ClickHouse is down, the worker writes batches to
+`PSG_SPILL_DIR` (fsync'd, capped at `PSG_SPILL_MAX_BYTES`, 5 GB by default) and replays them
+in order once it is back. 25,000 TPS spills about 4 MB/s, so 5 GB covers about 20 minutes.
+Each batch carries an `insert_deduplication_token`, so a batch resent after a lost reply is
+not counted twice, in the raw tables or the roll-ups.
+
+Set `PSG_EVENTS_ENABLED=false` to turn events off, for example while load-testing another
+platform on a host short of memory. Reports then show nothing new.
+
+Report API (admin session; every endpoint takes `from`, `to`, `format=json|csv`):
+`GET /api/v1/reports/traffic`, `/reports/outcomes?gateway_id=`, `/reports/dlr-delay`,
+`/reports/binds`, `/messages?message_id=` or `?destination=`.
 
 ## Using the MariaDB, Redis and ClickHouse already on the host
 
@@ -240,8 +277,9 @@ python3 -m venv control/.venv && control/.venv/bin/pip install -e "control[dev]"
 make test          # Go vet + race tests, ruff + pytest, panel typecheck + build
 ```
 
-`make test` starts throwaway MariaDB (127.0.0.1:13399) and Redis (127.0.0.1:16399)
-containers: the control-plane API tests and the worker's Redis tests run against them.
+`make test` starts throwaway MariaDB (127.0.0.1:13399), Redis (127.0.0.1:16399) and
+ClickHouse (HTTP 127.0.0.1:18199) containers: the control-plane API and report tests and
+the worker's Redis and ClickHouse tests run against them.
 
 ```sh
 cd panel && npm run dev    # proxies /api to the control plane on :8080

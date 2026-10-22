@@ -4,6 +4,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { del, get, patch, post, put, qs } from "./client";
 import type {
   AuditEntry,
+  BindReport,
+  DelayReport,
+  MessageSearchResult,
+  MixReport,
+  TrafficReport,
   CommandStatus,
   Defaults,
   DlrError,
@@ -208,3 +213,36 @@ export const useAudit = (f: AuditFilter) =>
 
 export const useLive = () =>
   useQuery({ queryKey: keys.live, queryFn: () => get<Live>("/live"), refetchInterval: 2000, refetchIntervalInBackground: false });
+
+// ---- reports ---------------------------------------------------------------------
+
+/** A report window; from/to are ISO strings fixed when the range is picked. */
+export interface ReportQuery {
+  from: string;
+  to: string;
+  gateway_id?: number;
+}
+
+/** URL of a report, for fetching or (with format=csv) downloading. */
+export const reportUrl = (path: string, params: Record<string, string | number | undefined>) => `/api/v1${path}${qs(params)}`;
+
+const report = <T,>(path: string, params: Record<string, string | number | undefined>, enabled = true) =>
+  useQuery({
+    queryKey: ["reports", path, params],
+    queryFn: () => get<T>(`${path}${qs(params)}`),
+    enabled,
+    staleTime: 30_000,
+  });
+
+export const useTrafficReport = (q: ReportQuery) => report<TrafficReport>("/reports/traffic", { ...q });
+export const useMixReport = (q: ReportQuery) => report<MixReport>("/reports/outcomes", { ...q }, q.gateway_id !== undefined);
+export const useDelayReport = (q: ReportQuery) => report<DelayReport>("/reports/dlr-delay", { ...q });
+export const useBindReport = (q: ReportQuery) => report<BindReport>("/reports/binds", { ...q });
+
+export const useMessageSearch = (params: { message_id?: string; destination?: string } | null) =>
+  useQuery({
+    queryKey: ["messages", params],
+    queryFn: () => get<MessageSearchResult>(`/messages${qs(params ?? {})}`),
+    enabled: params !== null,
+    staleTime: 10_000,
+  });

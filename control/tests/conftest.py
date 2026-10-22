@@ -1,10 +1,12 @@
-"""API tests run against real MariaDB and Redis:
+"""API tests run against real MariaDB and Redis, and ClickHouse for reports:
 
     PSG_TEST_MARIADB_URL=mysql+pymysql://psg:psgtest@127.0.0.1:13399
     PSG_TEST_REDIS_ADDR=127.0.0.1:16399
+    PSG_TEST_CLICKHOUSE_URL=http://127.0.0.1:18199
 
-Each test gets a freshly migrated database (created and dropped per session)
-and a flushed Redis database 14.
+Each test gets a freshly migrated database (created and dropped per session),
+a flushed Redis database 14 and, if it asks for `ch`, its own ClickHouse
+database.
 """
 
 import base64
@@ -13,6 +15,7 @@ import os
 import secrets
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 import redis
@@ -26,12 +29,17 @@ from psg_control.settings import Settings
 
 MARIADB_URL = os.environ.get("PSG_TEST_MARIADB_URL")
 REDIS_ADDR = os.environ.get("PSG_TEST_REDIS_ADDR")
+CLICKHOUSE_URL = os.environ.get("PSG_TEST_CLICKHOUSE_URL")
 ADMIN_PASSWORD = "correct-horse-battery"
 INTERNAL_TOKEN = "test-internal-token"
 REDIS_DB = 14
 
 needs_stores = pytest.mark.skipif(
     not (MARIADB_URL and REDIS_ADDR), reason="PSG_TEST_MARIADB_URL / PSG_TEST_REDIS_ADDR not set"
+)
+needs_clickhouse = pytest.mark.skipif(
+    not (MARIADB_URL and REDIS_ADDR and CLICKHOUSE_URL),
+    reason="PSG_TEST_MARIADB_URL / PSG_TEST_REDIS_ADDR / PSG_TEST_CLICKHOUSE_URL not set",
 )
 
 
@@ -74,7 +82,11 @@ def rdb():
 @pytest.fixture
 def settings(database, rdb) -> Settings:
     host, port = REDIS_ADDR.split(":")
+    ch = urlsplit(CLICKHOUSE_URL or "http://127.0.0.1:1")
     return Settings(
+        clickhouse_host=ch.hostname,
+        clickhouse_http_port=ch.port,
+        clickhouse_database=database.database,  # created by the ch fixture
         mariadb_host=database.host,
         mariadb_port=database.port,
         mariadb_user=database.username,
@@ -96,6 +108,19 @@ def settings(database, rdb) -> Settings:
 def client(settings):
     with TestClient(create_app(settings, run_scheduler=False)) as c:
         yield c
+
+
+@pytest.fixture
+def ch(client):
+    """The test's ClickHouse database, with the event schema applied."""
+    from psg_control.clickhouse import migrate
+
+    stores = client.app.state.stores
+    migrate(stores.clickhouse)
+    yield stores.clickhouse
+    stores.clickhouse.execute(
+        f"DROP DATABASE IF EXISTS `{stores.clickhouse.database}`", database=False
+    )
 
 
 @pytest.fixture

@@ -195,3 +195,119 @@ export interface PortCheck {
   suggested_port?: number | null;
   warnings?: string[];
 }
+
+// ---- reports (ClickHouse) ----------------------------------------------------------
+// Times are Unix milliseconds. Message IDs are strings: they pass 2^53.
+
+export interface TrafficRow {
+  t: number;
+  gateway_id: number;
+  gateway: string | null; // null: gateway since deleted
+  accepted: number;
+  rejected: number;
+  throttled: number;
+  invalid: number;
+  licence_throttled: number;
+  dlr_acknowledged: number;
+  dlr_retried: number;
+  dlr_failed: number;
+  dlr_queued: number;
+  dlr_expired: number;
+}
+
+export interface TrafficReport {
+  from: string;
+  to: string;
+  step: number; // seconds per row
+  rows: TrafficRow[];
+}
+
+export interface MixRow {
+  name: string;
+  command_status: number;
+  dlr_status: string | null;
+  dlr_error: string | null;
+  configured_pct: number | null; // null: no longer in the rule
+  actual: number;
+  actual_pct: number | null;
+}
+
+export interface MixReport {
+  gateway_id: number;
+  rule: { id: number; name: string; mode: string };
+  picked: number;
+  not_picked: { throttled: number; invalid: number; licence_throttled: number; receiver_only: number };
+  rows: MixRow[];
+}
+
+export interface DelayReport {
+  dlrs: number;
+  avg_ms: number | null;
+  rows: { from_ms: number; to_ms: number | null; dlrs: number }[];
+}
+
+export interface BindEvent {
+  ts: number;
+  gateway_id: number;
+  gateway: string | null;
+  worker_id: number;
+  session_id: number;
+  event: "bound" | "bind_failed" | "closed" | "killed";
+  bind_type: string;
+  system_id: string;
+  remote: string;
+  status: number;
+  submits: number;
+}
+
+export interface BindReport {
+  truncated: boolean;
+  rows: BindEvent[];
+}
+
+export interface SubmitEvent {
+  ts: number;
+  worker_id: number;
+  gateway_id: number;
+  gateway: string | null;
+  session_id: number;
+  system_id: string;
+  message_id: string; // hex, as in submit_sm_resp; "" unless accepted
+  message_id_dec: string;
+  source_addr: string;
+  dest_addr: string;
+  result: "accepted" | "rejected" | "throttled" | "invalid" | "licence_throttled";
+  command_status: number;
+  outcome: string;
+  dlr_status: string;
+  dlr_error: string;
+  registered_delivery: number;
+  data_coding: number;
+  sm_length: number;
+}
+
+export interface DlrEvent {
+  ts: number;
+  worker_id: number;
+  gateway_id: number;
+  gateway: string | null;
+  session_id: number;
+  message_id: string;
+  message_id_dec: string;
+  source_addr: string;
+  dest_addr: string;
+  result: "acknowledged" | "retried" | "failed" | "queued" | "expired";
+  dlr_status: string;
+  dlr_error: string;
+  attempt: number;
+  submit_ts: number;
+  delay_ms: number;
+  resp_ms: number;
+  command_status: number;
+}
+
+export interface MessageSearchResult {
+  submits: SubmitEvent[];
+  dlrs: DlrEvent[];
+  truncated: boolean;
+}

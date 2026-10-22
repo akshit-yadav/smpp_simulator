@@ -23,8 +23,8 @@ const NAV: { group: string; items: Item[] }[] = [
   {
     group: "Traffic",
     items: [
-      { to: "/reports", label: "Reports", soon: "M4" },
-      { to: "/search", label: "Message search", soon: "M4" },
+      { to: "/reports", label: "Reports" },
+      { to: "/search", label: "Message search" },
     ],
   },
   {

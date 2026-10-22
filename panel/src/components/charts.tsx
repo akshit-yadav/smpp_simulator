@@ -1,5 +1,5 @@
 // Small dependency-free SVG charts: a multi-series line chart with a crosshair
-// tooltip, and a sparkline. Lines are 2 px, the grid is recessive, colours come
+// tooltip, a bar chart with per-bar tooltips, and a sparkline. Lines are 2 px, the grid is recessive, colours come
 // from the validated --series-N tokens in fixed order, and every chart with two
 // or more series has a legend (identity is never colour alone).
 
@@ -45,12 +45,19 @@ export function LineChart({
   height = 200,
   unit = "/s",
   ariaLabel,
+  formatTime = clock,
+  legendValue,
+  emptyText = "Collecting data…",
 }: {
   series: Series[];
   times: number[];
   height?: number;
   unit?: string;
   ariaLabel: string;
+  formatTime?: (ts: number) => string;
+  /** What the legend shows next to each name; default: the latest value. */
+  legendValue?: (s: Series) => string;
+  emptyText?: string;
 }) {
   const [ref, W] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
@@ -76,10 +83,7 @@ export function LineChart({
             <span key={s.name} className="legend-item">
               <span className="legend-swatch" style={{ background: s.color }} />
               {s.name}
-              <b className="mono">
-                {fmtRate(s.values[s.values.length - 1] ?? 0)}
-                {unit}
-              </b>
+              <b className="mono">{legendValue ? legendValue(s) : `${fmtRate(s.values[s.values.length - 1] ?? 0)}${unit}`}</b>
             </span>
           ))}
         </div>
@@ -97,10 +101,10 @@ export function LineChart({
           {n > 1 && (
             <>
               <text className="axis" x={pad.l} y={height - 4}>
-                {clock(times[0])}
+                {formatTime(times[0])}
               </text>
               <text className="axis" x={W - pad.r} y={height - 4} textAnchor="end">
-                {clock(times[n - 1])}
+                {formatTime(times[n - 1])}
               </text>
             </>
           )}
@@ -130,7 +134,7 @@ export function LineChart({
             className="tooltip"
             style={{ left: x(hover), top: 8, transform: x(hover) > W * 0.6 ? "translateX(calc(-100% - 12px))" : "translateX(12px)" }}
           >
-            <div className="muted">{clock(times[hover])}</div>
+            <div className="muted">{formatTime(times[hover])}</div>
             {series.map((s) => (
               <div key={s.name} className="tooltip-row">
                 <span className="legend-item">
@@ -147,7 +151,94 @@ export function LineChart({
         )}
         {n < 2 && (
           <div className="muted small" style={{ position: "absolute", left: pad.l + 8, top: height / 2 - 20 }}>
-            Collecting data…
+            {emptyText}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export interface Bar {
+  label: string; // under the bar
+  title: string; // tooltip heading
+  value: number;
+}
+
+/** Vertical bars for one series (no legend: the card title names it). Bars
+ * have 4 px rounded tops on the baseline and 2 px gaps; each whole column is
+ * the hover target. */
+export function BarChart({
+  bars,
+  height = 200,
+  ariaLabel,
+  color = "var(--series-1)",
+  formatValue = (v: number) => fmtRate(v),
+}: {
+  bars: Bar[];
+  height?: number;
+  ariaLabel: string;
+  color?: string;
+  formatValue?: (v: number) => string;
+}) {
+  const [ref, W] = useWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<number | null>(null);
+  const pad = { l: 48, r: 8, t: 8, b: 22 };
+  const max = niceMax(Math.max(0, ...bars.map((b) => b.value)));
+  const total = bars.reduce((a, b) => a + b.value, 0);
+  const slot = (W - pad.l - pad.r) / Math.max(1, bars.length);
+  const bw = Math.max(2, slot - 2); // 2 px surface gap between bars
+  const base = height - pad.b;
+  const y = (v: number) => pad.t + (1 - v / max) * (base - pad.t);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * max);
+  const every = Math.ceil(44 / slot); // label every n-th bar so labels never collide
+
+  const barPath = (x: number, top: number) => {
+    const r = Math.min(4, bw / 2, base - top);
+    return `M${x},${base} V${top + r} Q${x},${top} ${x + r},${top} H${x + bw - r} Q${x + bw},${top} ${x + bw},${top + r} V${base} Z`;
+  };
+
+  return (
+    <div className="chart">
+      <div ref={ref} onPointerLeave={() => setHover(null)} style={{ position: "relative" }}>
+        <svg width={W} height={height} role="img" aria-label={ariaLabel}>
+          {ticks.map((t) => (
+            <g key={t}>
+              <line className="gridline" x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} />
+              <text className="axis" x={pad.l - 8} y={y(t) + 4} textAnchor="end">
+                {axisLabel(t)}
+              </text>
+            </g>
+          ))}
+          {bars.map((b, i) => {
+            const x = pad.l + i * slot + 1;
+            return (
+              <g key={b.title} onPointerEnter={() => setHover(i)}>
+                <rect x={pad.l + i * slot} y={pad.t} width={slot} height={base - pad.t} fill="transparent" />
+                {b.value > 0 && <path d={barPath(x, y(b.value))} fill={color} opacity={hover === null || hover === i ? 1 : 0.55} />}
+                {i % every === 0 && (
+                  <text className="axis" x={x + bw / 2} y={height - 4} textAnchor="middle">
+                    {b.label}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+        {hover !== null && (
+          <div
+            className="tooltip"
+            style={{
+              left: pad.l + hover * slot + slot / 2,
+              top: 8,
+              transform: hover > bars.length * 0.6 ? "translateX(calc(-100% - 12px))" : "translateX(12px)",
+            }}
+          >
+            <div className="muted">{bars[hover].title}</div>
+            <div className="tooltip-row">
+              <span>{formatValue(bars[hover].value)}</span>
+              <b>{total ? `${((100 * bars[hover].value) / total).toFixed(1)}%` : "—"}</b>
+            </div>
           </div>
         )}
       </div>

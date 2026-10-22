@@ -40,6 +40,8 @@ ignore = ["S104"]  # binding 0.0.0.0 is configurable on purpose
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "E501"]
+# SQL there is built from constant fragments only; every value is a ClickHouse query parameter.
+"psg_control/api/reports.py" = ["S608"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -5,6 +5,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/events"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/msgid"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/outcome"
@@ -121,19 +122,48 @@ func (m *Manager) dispatch(j *dlrJob) {
 	if j.QueuedAt.IsZero() {
 		j.QueuedAt = time.Now()
 	}
+	m.recordQueued(j, events.DLRQueued)
 	m.queue.push(j)
 }
 
+// recordQueued emits a dlr_events row for a DLR entering or expiring from the
+// queue. Call it while no other goroutine can change j.
+func (m *Manager) recordQueued(j *dlrJob, result events.DLRResult) {
+	m.events.DLR(events.DLR{
+		TS: time.Now(), GatewayID: j.GatewayID, MessageID: j.MsgID, Src: j.Src, Dst: j.Dst, Result: result,
+		DLRStatus: j.Outcome.DLRStatus, DLRError: j.Outcome.DLRError, Attempt: attempt(j), SubmitTS: j.SubmitAt,
+	})
+}
+
+// dlrEvent describes a deliver_sm this session sent. Build it before a retry
+// changes the job.
+func (s *Session) dlrEvent(f *inflight, now time.Time, status pdu.Status, answered bool) events.DLR {
+	j := f.job
+	e := events.DLR{
+		TS: now, GatewayID: j.GatewayID, SessionID: s.id, MessageID: j.MsgID, Src: j.Src, Dst: j.Dst,
+		DLRStatus: j.Outcome.DLRStatus, DLRError: j.Outcome.DLRError, Attempt: attempt(j),
+		SubmitTS: j.SubmitAt, DelayMS: events.Millis(f.sentAt.Sub(j.SubmitAt)), Status: uint32(status),
+	}
+	if answered {
+		e.RespMS = events.Millis(now.Sub(f.sentAt))
+	}
+	return e
+}
+
+func attempt(j *dlrJob) uint8 { return uint8(min(j.Attempts+1, 0xFF)) }
+
 // retryDLR re-schedules a DLR after a deliver_sm_resp error or timeout, with
-// exponential backoff, up to Options.DLRRetries times.
-func (m *Manager) retryDLR(gw *Gateway, j *dlrJob) {
+// exponential backoff, up to Options.DLRRetries times. It returns
+// DLRRetried, or DLRFailed once the retries are used up.
+func (m *Manager) retryDLR(gw *Gateway, j *dlrJob) events.DLRResult {
 	j.Attempts++
 	if j.Attempts > m.opt.DLRRetries {
 		gw.stats.DLRFailed.Add(1)
-		return
+		return events.DLRFailed
 	}
 	gw.stats.DLRRetried.Add(1)
 	m.wheel.Add(time.Now().Add(time.Second<<(j.Attempts-1)), j)
+	return events.DLRRetried
 }
 
 // dlrLoop sends this session's DLRs, keeping at most windowSize in flight and
@@ -186,27 +216,33 @@ func (s *Session) handleDeliverResp(p pdu.Packet) {
 		return
 	}
 	<-s.window
+	e := s.dlrEvent(f, time.Now(), p.Status, true)
 	if p.CommandID == pdu.DeliverSMResp && p.Status == pdu.ESME_ROK {
 		s.gw.stats.DLRAck.Add(1)
-		return
+		e.Result = events.DLRAcknowledged
+	} else {
+		e.Result = s.m.retryDLR(s.gw, f.job)
 	}
-	s.m.retryDLR(s.gw, f.job)
+	s.m.events.DLR(e)
 }
 
 func (s *Session) sweepTimeouts() {
-	cutoff := time.Now().Add(-s.m.opt.DLRTimeout)
-	var expired []*dlrJob
+	now := time.Now()
+	cutoff := now.Add(-s.m.opt.DLRTimeout)
+	var expired []*inflight
 	s.pendMu.Lock()
 	for seq, f := range s.pending {
 		if f.sentAt.Before(cutoff) {
-			expired = append(expired, f.job)
+			expired = append(expired, f)
 			delete(s.pending, seq)
 		}
 	}
 	s.pendMu.Unlock()
-	for _, j := range expired {
+	for _, f := range expired {
 		<-s.window
-		s.m.retryDLR(s.gw, j)
+		e := s.dlrEvent(f, now, pdu.ESME_ROK, false)
+		e.Result = s.m.retryDLR(s.gw, f.job)
+		s.m.events.DLR(e)
 	}
 }
 

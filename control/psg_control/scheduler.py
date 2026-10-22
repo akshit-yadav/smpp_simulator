@@ -8,6 +8,7 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from psg_control import clickhouse
 from psg_control.api.workers import upsert_from_heartbeat
 from psg_control.auth import utcnow
 from psg_control.stores import Stores
@@ -33,7 +34,17 @@ def sync_worker_registry(stores: Stores) -> int:
 
 async def run(stores: Stores) -> None:
     failing = False
+    schema_ready, schema_warned = False, False
     while True:
+        if not schema_ready:
+            # Workers spill events to disk until the tables exist, so keep trying.
+            try:
+                await asyncio.to_thread(clickhouse.migrate, stores.clickhouse)
+                schema_ready = True
+            except clickhouse.ClickHouseError as exc:
+                if not schema_warned:
+                    log.warning("clickhouse schema not applied yet, retrying: %s", exc)
+                schema_warned = True
         try:
             await asyncio.to_thread(sync_worker_registry, stores)
             if failing:

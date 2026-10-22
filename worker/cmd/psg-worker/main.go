@@ -25,6 +25,7 @@ import (
 
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/config"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/control"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/events"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/heartbeat"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/server"
@@ -71,6 +72,34 @@ func main() {
 		StartedAt:   time.Now().UTC(),
 	}, 2*time.Second, log)
 
+	// Events get their own context: they stop after the manager, so the
+	// session-closed events of the shutdown are written too.
+	var rec *events.Recorder
+	if cfg.EventsEnabled {
+		rec, err = events.New(events.Options{
+			WorkerID:      cfg.WorkerID,
+			URL:           cfg.ClickHouseURL,
+			Database:      cfg.ClickHouseDB,
+			User:          cfg.ClickHouseUser,
+			Password:      cfg.ClickHouseKey,
+			SpillDir:      cfg.SpillDir,
+			SpillMaxBytes: cfg.SpillMaxBytes,
+			Registerer:    prometheus.DefaultRegisterer,
+			Log:           log,
+		})
+		if err != nil {
+			log.Error("events disabled", "err", err)
+		}
+	}
+	recCtx, stopRec := context.WithCancel(context.Background())
+	recDone := make(chan struct{})
+	go func() {
+		if rec != nil {
+			rec.Run(recCtx)
+		}
+		close(recDone)
+	}()
+
 	mgr := server.NewManager(server.Options{
 		WorkerID:    cfg.WorkerID,
 		ListenHost:  cfg.ListenHost,
@@ -78,6 +107,7 @@ func main() {
 		Redis:       rdb,
 		Registerer:  prometheus.DefaultRegisterer,
 		Log:         log,
+		Events:      rec,
 	})
 	mgrDone := make(chan struct{})
 	go func() { mgr.Run(ctx); close(mgrDone) }()
@@ -119,10 +149,13 @@ func main() {
 		"redis_addr", cfg.RedisAddr,
 		"control_url", cfg.ControlURL,
 		"config_source", configSource(cfg),
+		"events", rec != nil,
 	)
 
 	<-ctx.Done()
 	<-mgrDone // stops listeners and persists queued DLRs
+	stopRec()
+	<-recDone // writes (or spills) the last events
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)

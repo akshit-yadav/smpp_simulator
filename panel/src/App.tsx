@@ -15,6 +15,8 @@ import GatewayDetail from "./pages/GatewayDetail";
 import GatewayEditor from "./pages/GatewayEditor";
 import Gateways from "./pages/Gateways";
 import Login from "./pages/Login";
+import MessageSearch from "./pages/MessageSearch";
+import Reports from "./pages/Reports";
 import SettingsPage from "./pages/Settings";
 import Workers from "./pages/Workers";
 
@@ -60,14 +62,8 @@ export default function App() {
         <Route path="gateway-defaults" element={<GatewayDefaults />} />
         <Route path="workers" element={<Workers />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route
-          path="reports"
-          element={<ComingSoon title="Reports" milestone="M4" what="Traffic by gateway, DLR rule mix (actual vs configured), DLR delay distribution, throttling, MO traffic, bind history and CSV export, from ClickHouse." />}
-        />
-        <Route
-          path="search"
-          element={<ComingSoon title="Message search" milestone="M4" what="Find a message by message ID or destination and see its submit, result and DLR events." />}
-        />
+        <Route path="reports" element={<Reports />} />
+        <Route path="search" element={<MessageSearch />} />
         <Route
           path="licence"
           element={<ComingSoon title="Licence" milestone="M8" what="Upload a licence, see machine fingerprints and limits, export a licence request, and choose which gateways stay active." />}
