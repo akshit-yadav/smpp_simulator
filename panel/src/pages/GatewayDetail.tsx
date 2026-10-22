@@ -23,10 +23,20 @@ const SETTING_LABELS: [SettingKey, string, GlossaryKey, (d: Defaults) => string]
   ],
   ["dlr_id_format", "DLR id: format", "dlrIdFormat", (d) => d.dlr_id_format],
   ["dlr_include_tlvs", "DLR TLVs", "dlrIncludeTlvs", (d) => (d.dlr_include_tlvs ? "Included" : "Off")],
+  [
+    "dlr_intermediate",
+    "Intermediate DLR",
+    "dlrIntermediate",
+    (d) =>
+      d.dlr_intermediate === "off"
+        ? "Off"
+        : `${d.dlr_intermediate_status} ${d.dlr_intermediate === "always" ? "always" : "when requested"}, after ${fmtMs(d.dlr_intermediate_delay_ms)}`,
+  ],
 ];
 
 const isCustom = (g: Gateway, k: SettingKey) => {
   if (k === "tps_limit") return g.settings.tps_limit !== null || g.settings.tps_scope !== null;
+  if (k === "dlr_intermediate") return ["dlr_intermediate", "dlr_intermediate_status", "dlr_intermediate_delay_ms"].some((x) => g.settings[x as SettingKey] !== null);
   if (k === "dlr_timing") return ["dlr_timing", "dlr_delay_ms", "dlr_min_ms", "dlr_max_ms"].some((x) => g.settings[x as SettingKey] !== null);
   return g.settings[k] !== null;
 };
@@ -372,7 +382,7 @@ export default function GatewayDetail() {
         </Card>
 
         <Card title="Live overrides">
-          <Empty title="Arrives in milestone M6">
+          <Empty title="Planned for a later phase">
             <p>Force a result, reject binds, drop sessions, black-hole or close the gateway, with optional auto-revert.</p>
           </Empty>
         </Card>

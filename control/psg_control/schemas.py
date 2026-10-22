@@ -13,6 +13,8 @@ DlrStatus = Literal[
     "ENROUTE", "DELIVRD", "EXPIRED", "DELETED", "UNDELIV", "ACCEPTD", "UNKNOWN", "REJECTD"
 ]
 Ms = Annotated[int, Field(ge=0, le=86_400_000)]  # up to 24 h
+Intermediate = Literal["off", "requested", "always"]
+IntermediateStatus = Literal["ENROUTE", "ACCEPTD"]
 
 if set(DlrStatus.__args__) != set(DLR_STATUSES):
     raise RuntimeError("DlrStatus is out of sync with catalog.DLR_STATUSES")
@@ -78,6 +80,9 @@ class Settings(Strict):
     dlr_date_seconds: bool | None = None
     dlr_include_text: bool | None = None
     dlr_include_tlvs: bool | None = None
+    dlr_intermediate: Intermediate | None = None
+    dlr_intermediate_status: IntermediateStatus | None = None
+    dlr_intermediate_delay_ms: Ms | None = None
     response_latency_ms: int | None = Field(default=None, ge=0, le=60_000)
     dlr_rule_id: int | None = None
 
@@ -103,6 +108,9 @@ class DefaultsIn(Strict):
     dlr_date_seconds: bool
     dlr_include_text: bool
     dlr_include_tlvs: bool
+    dlr_intermediate: Intermediate = "off"
+    dlr_intermediate_status: IntermediateStatus = "ENROUTE"
+    dlr_intermediate_delay_ms: Ms = 0
     response_latency_ms: int = Field(ge=0, le=60_000)
     dlr_rule_id: int
 

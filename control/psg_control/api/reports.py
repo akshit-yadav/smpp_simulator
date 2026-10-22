@@ -256,7 +256,8 @@ def dlr_delay(
     gateway_id: GatewayIDs = None,
     format: Format = "json",
 ):
-    """Acknowledged DLRs by delay from submit_sm to deliver_sm, in buckets
+    """Acknowledged final DLRs (intermediate ENROUTE/ACCEPTD receipts left out)
+    by delay from submit_sm to deliver_sm, in buckets
     (from_ms inclusive, to_ms exclusive; the last bucket is open-ended)."""
     start, end = time_range(start, end)
     params = {"from": start, "to": end}
@@ -265,6 +266,7 @@ def dlr_delay(
         stores.clickhouse,
         "SELECT delay_bucket, sum(dlrs) AS dlrs, sum(delay_ms_sum) AS delay_ms_sum "
         "FROM dlr_minute WHERE result = 'acknowledged' "
+        "AND dlr_status NOT IN ('ENROUTE', 'ACCEPTD') "
         f"AND {MINUTES} {gw} "
         "GROUP BY delay_bucket",
         params,

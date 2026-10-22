@@ -39,6 +39,11 @@ const (
 
 	IDHex     = "hex"
 	IDDecimal = "decimal"
+
+	// When an intermediate DLR (ENROUTE/ACCEPTD) precedes the final one.
+	IntermediateOff       = "off"
+	IntermediateRequested = "requested" // registered_delivery bit 4 set
+	IntermediateAlways    = "always"    // any DLR requested
 )
 
 type TPS struct {
@@ -56,6 +61,10 @@ type DLR struct {
 	DateSeconds bool   `json:"date_seconds"` // YYMMDDhhmmss instead of YYMMDDhhmm
 	IncludeText bool   `json:"include_text"`
 	IncludeTLVs bool   `json:"include_tlvs"`
+
+	Intermediate       string `json:"intermediate"`          // off | requested | always
+	IntermediateStatus string `json:"intermediate_status"`   // ENROUTE | ACCEPTD
+	IntermediateMS     int    `json:"intermediate_delay_ms"` // after submit_sm
 }
 
 type Config struct {
@@ -82,6 +91,7 @@ var Builtin = Config{
 	DLR: DLR{
 		Enabled: true, Timing: TimingRandom, MinMS: 500, MaxMS: 2000,
 		IDFormat: IDHex, DateSeconds: false, IncludeText: true, IncludeTLVs: true,
+		Intermediate: IntermediateOff, IntermediateStatus: "ENROUTE",
 	},
 	Outcome: outcome.Default,
 }
@@ -119,6 +129,12 @@ func (c *Config) Validate() error {
 		check(false, "invalid dlr.timing %q", c.DLR.Timing)
 	}
 	check(c.DLR.IDFormat == IDHex || c.DLR.IDFormat == IDDecimal, "invalid dlr.id_format %q", c.DLR.IDFormat)
+	check(slices.Contains([]string{"", IntermediateOff, IntermediateRequested, IntermediateAlways}, c.DLR.Intermediate),
+		"invalid dlr.intermediate %q", c.DLR.Intermediate)
+	if c.DLR.Intermediate == IntermediateRequested || c.DLR.Intermediate == IntermediateAlways {
+		check(outcome.IsIntermediate(c.DLR.IntermediateStatus), "dlr.intermediate_status must be ENROUTE or ACCEPTD")
+		check(c.DLR.IntermediateMS >= 0, "dlr.intermediate_delay_ms must be >= 0")
+	}
 	if err := c.Outcome.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("outcome: %w", err))
 	}

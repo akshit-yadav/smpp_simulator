@@ -150,7 +150,16 @@ def test_dlr_delay_distribution(admin, ch, base):
             {"ts": at(base, 1), "gateway_id": 1, "result": "acknowledged", "delay_ms": d}
             for d in (50, 1500, 1999, 400_000)
         ]
-        + [{"ts": at(base, 1), "gateway_id": 1, "result": "retried", "delay_ms": 3000}],
+        + [{"ts": at(base, 1), "gateway_id": 1, "result": "retried", "delay_ms": 3000}]
+        + [
+            {
+                "ts": at(base, 1),
+                "gateway_id": 1,
+                "result": "acknowledged",
+                "dlr_status": "ENROUTE",
+                "delay_ms": 10,
+            }
+        ],
     )
     r = admin.get("/api/v1/reports/dlr-delay", params=window(base)).json()
     assert r["dlrs"] == 4 and r["avg_ms"] == round((50 + 1500 + 1999 + 400_000) / 4)

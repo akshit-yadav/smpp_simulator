@@ -54,6 +54,9 @@ def test_create_gateway_end_to_end(admin, worker):
         "date_seconds": False,
         "include_text": True,
         "include_tlvs": True,
+        "intermediate": "off",
+        "intermediate_status": "ENROUTE",
+        "intermediate_delay_ms": 0,
     }
     assert (
         g["outcome"]["mode"] == "fixed" and g["outcome"]["outcomes"][0]["dlr_status"] == "DELIVRD"
@@ -235,3 +238,33 @@ def test_runtime_status_from_worker(admin, rdb, worker):
     gw = admin.post(GW, json=new_gw()).json()
     rdb.hset("psg:gwstatus:1", str(gw["id"]), '{"state": "listening", "port": 20001}')
     assert admin.get(f"{GW}/{gw['id']}").json()["runtime"]["state"] == "listening"
+
+
+def test_intermediate_dlr_settings(admin, worker):
+    d = admin.get("/api/v1/defaults").json()
+    assert (
+        d["dlr_intermediate"],
+        d["dlr_intermediate_status"],
+        d["dlr_intermediate_delay_ms"],
+    ) == (
+        "off",
+        "ENROUTE",
+        0,
+    )
+    gw = admin.post(
+        GW,
+        json=new_gw(
+            dlr_intermediate="always",
+            dlr_intermediate_status="ACCEPTD",
+            dlr_intermediate_delay_ms=100,
+        ),
+    )
+    assert gw.status_code == 201, gw.text
+    dlr = internal_config(admin)["gateways"][0]["dlr"]
+    assert (dlr["intermediate"], dlr["intermediate_status"], dlr["intermediate_delay_ms"]) == (
+        "always",
+        "ACCEPTD",
+        100,
+    )
+    bad = new_gw(name="b", port=20002, dlr_intermediate_status="DELIVRD")
+    assert admin.post(GW, json=bad).status_code == 422

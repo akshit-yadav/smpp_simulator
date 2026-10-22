@@ -31,6 +31,9 @@ export interface Settings {
   dlr_date_seconds: boolean | null;
   dlr_include_text: boolean | null;
   dlr_include_tlvs: boolean | null;
+  dlr_intermediate: "off" | "requested" | "always" | null;
+  dlr_intermediate_status: "ENROUTE" | "ACCEPTD" | null;
+  dlr_intermediate_delay_ms: number | null;
   response_latency_ms: number | null;
   dlr_rule_id: number | null;
 }

@@ -28,6 +28,9 @@ export const GLOSSARY = {
   dlrIdFormat: "How the message ID is written in the DLR's id: field. Hex matches the ID in submit_sm_resp; some platforms expect decimal.",
   dlrDateSeconds: "Format of submit date: and done date: in the DLR text. Without seconds: YYMMDDhhmm. With seconds: YYMMDDhhmmss.",
   dlrIncludeText: "Add text: with the first 20 characters of the original message (or the DLR error's custom text) to the DLR.",
+  dlrIntermediate: "An extra DLR with an in-progress status (ENROUTE or ACCEPTD) sent before the final one, to test how a platform handles intermediate receipts. When requested: only if the submit_sm sets registered_delivery bit 4 (0x10). Always: for every accepted message that asks for any DLR. The final DLR follows the normal timing and never arrives first.",
+  dlrIntermediateStatus: "The stat: value of the intermediate DLR. ENROUTE (message_state 1): on its way. ACCEPTD (message_state 6): accepted by the network.",
+  dlrIntermediateDelay: "Time after the submit_sm_resp before the intermediate DLR is sent. If it is longer than the final DLR's delay, the final DLR waits and follows right after it.",
   dlrIncludeTlvs: "Add the receipted_message_id, message_state and (if the error defines one) network_error_code TLVs to the DLR.",
 
   // limits
@@ -35,7 +38,7 @@ export const GLOSSARY = {
   tpsScope: "Per bind: every session gets the full limit. Per gateway: all sessions of this gateway share one limit.",
   maxBinds: "Maximum number of sessions bound to this gateway at the same time. Further binds get ESME_RBINDFAIL. 0 means unlimited.",
   bindTypes: "Which bind types clients may use: TX (transmitter: sends messages), RX (receiver: gets DLRs and MO), TRX (transceiver: both).",
-  responseLatency: "Artificial delay before each submit_sm_resp, to simulate a slow vendor. Applied by the worker from milestone M6.",
+  responseLatency: "Artificial delay before each submit_sm_resp, to simulate a slow vendor. Saved but not applied yet: planned for a later phase.",
 
   // catalog
   commandStatus: "SMPP command_status codes. The SMPP 3.4 list is read-only; you can add vendor-specific codes in the range 0x400 to 0x4FF.",
@@ -61,7 +64,7 @@ export const GLOSSARY = {
   // reports
   reportRetention: "Reports come from per-minute totals kept for 180 days. Bind history and message search use raw events, kept for 3 days.",
   ruleMix: "The share of messages each DLR rule entry actually got, against the share configured in the rule. Only messages that reached the rule count: throttled and invalid submit_sm never do.",
-  dlrDelay: "Time from accepting a submit_sm to sending its DLR (deliver_sm), for DLRs the client acknowledged. Includes retry backoff if a first attempt failed.",
+  dlrDelay: "Time from accepting a submit_sm to sending its final DLR (deliver_sm), for DLRs the client acknowledged. Intermediate DLRs are left out. Includes retry backoff if a first attempt failed.",
   dlrAcknowledged: "DLRs the client answered with deliver_sm_resp ESME_ROK.",
   dlrRetried: "DLRs sent again after an error deliver_sm_resp or no answer within 30 s (up to 5 times, with backoff).",
   dlrFailed: "DLRs given up after all retries.",

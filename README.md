@@ -15,7 +15,11 @@ behaviour, MO traffic and TPS limit.
 | M3 Control plane: admin login + TOTP, audit log, gateway/DLR rule/catalog/defaults API, 3-layer port check, config sync, worker registry | ✅ Done. Manage gateways through the REST API (Swagger UI at `/api/docs`) |
 | M4 Events and reports: batched ClickHouse writer with disk spill, per-minute roll-ups, report and message-search API, the panel's Reports and Message search screens | ✅ Done |
 | M5 Panel: login + TOTP, live dashboard, Gateway Manager (list/editor/detail, sessions with kill), DLR Rules with preview, error catalog, Gateway Defaults, workers, settings & audit | ✅ Done |
-| M6–M9 `submit_multi`/`data_sm`/`query_sm`…, overrides, MO, licensing, hardening | ⏳ Not started |
+| M6 Intermediate DLRs (ENROUTE/ACCEPTD before the final DLR: off, when requested, always) | ✅ Done |
+| M7 MO generator | ⏳ Next |
+| M8 Licensing | ⏳ Not started |
+| M9 Hardening and acceptance | ⏳ Not started |
+| Next phase (deferred from M6): `submit_multi`, `data_sm`, `query_sm`, `cancel_sm`, `replace_sm`; conditional rules; live overrides; response latency | 🕓 Deferred |
 
 See [docs/build-prompt.md](docs/build-prompt.md) for the full scope.
 
@@ -188,6 +192,7 @@ to every gateway and a gateway overrides only the fields it sets.
 | `tps.limit`, `tps.scope` | `0` = unlimited; `bind` (each bind gets the limit) or `gateway` (shared). Excess gets `ESME_RTHROTTLED` |
 | `dlr.enabled`, `dlr.timing` | `immediate`, `fixed` (`delay_ms`) or `random` (`min_ms`–`max_ms`) |
 | `dlr.id_format`, `dlr.date_seconds`, `dlr.include_text`, `dlr.include_tlvs` | DLR format options |
+| `dlr.intermediate`, `dlr.intermediate_status`, `dlr.intermediate_delay_ms` | Intermediate DLR before the final one: `off` (default), `requested` (only with `registered_delivery` bit `0x10`) or `always` (any DLR requested); status `ENROUTE` or `ACCEPTD`; sent this many ms after `submit_sm_resp` |
 | `outcome.mode` (the DLR rule) | `fixed` (first entry), `random` (uniform) or `weighted` (`weight_bp`, basis points totalling 10000) |
 | `outcome.distribution` | `probabilistic` (default) or `exact` (every block of 10,000 matches the weights exactly) |
 | `outcome.seed` | Optional; makes runs repeatable |
@@ -195,7 +200,9 @@ to every gateway and a gateway overrides only the fields it sets.
 
 A DLR is sent only when DLR is enabled, the message was accepted, and
 `registered_delivery` asks for it (bits `01` always, `10` failures only; intermediate
-`ENROUTE`/`ACCEPTD` need bit `0x10`). With no RX/TRX session bound, DLRs queue (persisted
+`ENROUTE`/`ACCEPTD` need bit `0x10`). An intermediate DLR (`dlr.intermediate`) carries
+`dlvrd:000 err:000`, the same `id:` and `message_state` 1 or 6; the final DLR keeps its own
+timing but never arrives before it. With no RX/TRX session bound, DLRs queue (persisted
 to Redis, kept 72 h) and are delivered when a receiver binds. A `deliver_sm_resp` error or
 a 30 s timeout is retried up to 5 times with backoff.
 

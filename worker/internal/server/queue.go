@@ -25,7 +25,14 @@ const (
 
 func queueKey(gatewayID int64) string { return "psg:dlrh:" + strconv.FormatInt(gatewayID, 10) }
 
-func queueField(j *dlrJob) string { return msgid.Hex(j.MsgID) }
+// queueField identifies a job in its gateway's hash: the message ID, plus a
+// suffix for an intermediate DLR queued next to its final one.
+func queueField(j *dlrJob) string {
+	if j.Interim {
+		return msgid.Hex(j.MsgID) + ":i"
+	}
+	return msgid.Hex(j.MsgID)
+}
 
 // dlrQueue holds DLRs for gateways with no receiver bound. Jobs live in
 // memory; a background persist (once a second, never on the hot path) mirrors

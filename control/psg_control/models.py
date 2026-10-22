@@ -162,6 +162,9 @@ SETTING_COLUMNS = (
     "dlr_date_seconds",
     "dlr_include_text",
     "dlr_include_tlvs",
+    "dlr_intermediate",
+    "dlr_intermediate_status",
+    "dlr_intermediate_delay_ms",
     "response_latency_ms",
     "dlr_rule_id",
 )
@@ -186,6 +189,9 @@ class Defaults(Base):
     dlr_date_seconds: Mapped[bool] = mapped_column(Boolean, default=False)
     dlr_include_text: Mapped[bool] = mapped_column(Boolean, default=True)
     dlr_include_tlvs: Mapped[bool] = mapped_column(Boolean, default=True)
+    dlr_intermediate: Mapped[str] = mapped_column(String(16), default="off")
+    dlr_intermediate_status: Mapped[str] = mapped_column(String(8), default="ENROUTE")
+    dlr_intermediate_delay_ms: Mapped[int] = mapped_column(Integer, default=0)
     response_latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     dlr_rule_id: Mapped[int] = mapped_column(ForeignKey("dlr_rule.id"))
     updated_at: Mapped[datetime] = mapped_column(
@@ -225,6 +231,9 @@ class Gateway(Base):
     dlr_date_seconds: Mapped[bool | None] = mapped_column(Boolean)
     dlr_include_text: Mapped[bool | None] = mapped_column(Boolean)
     dlr_include_tlvs: Mapped[bool | None] = mapped_column(Boolean)
+    dlr_intermediate: Mapped[str | None] = mapped_column(String(16))
+    dlr_intermediate_status: Mapped[str | None] = mapped_column(String(8))
+    dlr_intermediate_delay_ms: Mapped[int | None] = mapped_column(Integer)
     response_latency_ms: Mapped[int | None] = mapped_column(Integer)
     dlr_rule_id: Mapped[int | None] = mapped_column(ForeignKey("dlr_rule.id", ondelete="SET NULL"))
 

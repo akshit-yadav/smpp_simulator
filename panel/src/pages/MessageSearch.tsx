@@ -163,7 +163,8 @@ function submitDetails(e: SubmitEvent): string {
 }
 
 function dlrDetails(e: DlrEvent): string {
-  const parts = [`${e.dlr_status} err ${e.dlr_error}`, `attempt ${e.attempt}`];
+  const interim = e.dlr_status === "ENROUTE" || e.dlr_status === "ACCEPTD";
+  const parts = [`${interim ? "intermediate " : ""}${e.dlr_status} err ${e.dlr_error}`, `attempt ${e.attempt}`];
   if (e.result === "acknowledged" || e.result === "retried" || e.result === "failed") {
     if (e.delay_ms) parts.push(`sent ${fmtMs(e.delay_ms)} after submit`);
     if (e.resp_ms) parts.push(`answered in ${fmtMs(e.resp_ms)}`);

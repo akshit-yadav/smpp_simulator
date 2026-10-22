@@ -28,6 +28,7 @@ type dlrJob struct {
 	Outcome   outcome.Outcome `json:"o"`
 	Attempts  int             `json:"a,omitempty"`
 	QueuedAt  time.Time       `json:"q,omitzero"`
+	Interim   bool            `json:"i,omitempty"` // intermediate DLR; the final one is a separate job
 }
 
 // wantDLR applies registered_delivery: bits 0-1 = 01 always, 10 on failure
@@ -41,6 +42,21 @@ func wantDLR(rd byte, o *outcome.Outcome) bool {
 		return true
 	case 2:
 		return !o.Delivered()
+	}
+	return false
+}
+
+// wantIntermediate reports whether an intermediate DLR goes before the final
+// one. Never when the outcome's own status is already intermediate.
+func wantIntermediate(cfg gateway.DLR, rd byte, o *outcome.Outcome) bool {
+	if outcome.IsIntermediate(o.DLRStatus) {
+		return false
+	}
+	switch cfg.Intermediate {
+	case gateway.IntermediateRequested:
+		return rd&0x10 != 0
+	case gateway.IntermediateAlways:
+		return rd&0x13 != 0
 	}
 	return false
 }
@@ -82,7 +98,11 @@ func receiptText(sm *pdu.SM) string {
 }
 
 func (m *Manager) scheduleDLR(rc *runtimeConfig, sm *pdu.SM, id uint64, o *outcome.Outcome, now time.Time) {
-	if !rc.DLR.Enabled || !wantDLR(sm.RegisteredDelivery, o) {
+	if !rc.DLR.Enabled {
+		return
+	}
+	final, interim := wantDLR(sm.RegisteredDelivery, o), wantIntermediate(rc.DLR, sm.RegisteredDelivery, o)
+	if !final && !interim {
 		return
 	}
 	j := &dlrJob{
@@ -94,8 +114,26 @@ func (m *Manager) scheduleDLR(rc *runtimeConfig, sm *pdu.SM, id uint64, o *outco
 	if rc.DLR.IncludeText {
 		j.Text = receiptText(sm)
 	}
-	if d := dlrDelay(rc.DLR, o); d > 0 {
-		m.wheel.Add(now.Add(d), j)
+	var interimAt time.Time
+	if interim {
+		ij := *j
+		ij.Interim = true
+		ij.Outcome = outcome.Outcome{Name: o.Name, DLRStatus: rc.DLR.IntermediateStatus, DLRError: "000"}
+		interimAt = now.Add(time.Duration(rc.DLR.IntermediateMS) * time.Millisecond)
+		m.scheduleAt(&ij, interimAt, now)
+	}
+	if final {
+		at := now.Add(dlrDelay(rc.DLR, o))
+		if interim && !at.After(interimAt) {
+			at = interimAt.Add(wheelTick) // the final DLR never overtakes the intermediate one
+		}
+		m.scheduleAt(j, at, now)
+	}
+}
+
+func (m *Manager) scheduleAt(j *dlrJob, at, now time.Time) {
+	if at.After(now) {
+		m.wheel.Add(at, j)
 		return
 	}
 	m.dispatch(j)

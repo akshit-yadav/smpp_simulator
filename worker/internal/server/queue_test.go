@@ -116,6 +116,23 @@ func TestQueuePersistFailurePutsWorkBack(t *testing.T) {
 	}
 }
 
+func TestQueueKeepsIntermediateAndFinalApart(t *testing.T) {
+	rdb := testRedis(t)
+	ctx := context.Background()
+	q := newDLRQueue(rdb, slog.Default())
+	q.push(&dlrJob{GatewayID: 3, MsgID: 7, Interim: true})
+	q.push(&dlrJob{GatewayID: 3, MsgID: 7})
+	q.persist(ctx)
+	if n := rdb.HLen(ctx, queueKey(3)).Val(); n != 2 {
+		t.Fatalf("hash length %d, want 2", n)
+	}
+	q2 := newDLRQueue(rdb, slog.Default())
+	q2.restore(3)
+	if jobs := q2.pop(3, 2); len(jobs) != 2 || jobs[0].Interim == jobs[1].Interim {
+		t.Fatalf("restored %+v", jobs)
+	}
+}
+
 func TestQueueKeepsJobsWhileRedisDown(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 100 * time.Millisecond, MaxRetries: -1})
 	defer rdb.Close()

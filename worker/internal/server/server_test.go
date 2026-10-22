@@ -602,3 +602,80 @@ func TestEventsReachClickHouse(t *testing.T) {
 		}
 	}
 }
+
+func dlrStat(t *testing.T, d *gpdu.DeliverSM) string {
+	t.Helper()
+	text, _ := d.Message.GetMessage()
+	i := strings.Index(text, "stat:")
+	if i < 0 {
+		t.Fatalf("DLR text %q", text)
+	}
+	return text[i+5 : i+12]
+}
+
+func TestIntermediateDLRs(t *testing.T) {
+	c := testConfig(t)
+	c.DLR.Timing, c.DLR.DelayMS = gateway.TimingFixed, 200
+	c.DLR.Intermediate, c.DLR.IntermediateStatus, c.DLR.IntermediateMS = gateway.IntermediateRequested, "ENROUTE", 50
+	m := startManager(t, c)
+	cl := mustBind(t, c, "trx")
+
+	// "requested": only with registered_delivery bit 4.
+	cl.submit(t, newSubmit(t, "final only", 0x01))
+	waitResp(t, cl)
+	if s := dlrStat(t, waitDLR(t, cl, time.Second)); s != "DELIVRD" {
+		t.Fatalf("got %s, want only the final DLR", s)
+	}
+	noDLR(t, cl, 100*time.Millisecond)
+
+	start := time.Now()
+	cl.submit(t, newSubmit(t, "with intermediate", 0x11))
+	r := waitResp(t, cl)
+	first := waitDLR(t, cl, time.Second)
+	atFirst := time.Since(start)
+	second := waitDLR(t, cl, time.Second)
+	if dlrStat(t, first) != "ENROUTE" || dlrStat(t, second) != "DELIVRD" {
+		t.Fatalf("DLRs %s then %s", dlrStat(t, first), dlrStat(t, second))
+	}
+	if atFirst < 50*time.Millisecond || atFirst > 120*time.Millisecond {
+		t.Errorf("intermediate DLR after %v, want ~50 ms", atFirst)
+	}
+	text, _ := first.Message.GetMessage()
+	if !strings.Contains(text, "id:"+r.MessageID+" ") || !strings.Contains(text, "dlvrd:000") || !strings.Contains(text, "err:000") {
+		t.Errorf("intermediate DLR text %q", text)
+	}
+	if f := first.OptionalParameters[gpdu.TagMessageStateOption]; len(f.Data) != 1 || f.Data[0] != 1 {
+		t.Errorf("intermediate message_state TLV = %v, want 1 (ENROUTE)", f.Data)
+	}
+
+	// "always": for any requested DLR. An intermediate delay past the final
+	// delay still sends the intermediate DLR first.
+	c.DLR.Intermediate, c.DLR.IntermediateStatus, c.DLR.IntermediateMS = gateway.IntermediateAlways, "ACCEPTD", 300
+	m.Apply([]gateway.Config{c})
+	cl.submit(t, newSubmit(t, "always", 0x01))
+	waitResp(t, cl)
+	a, b := waitDLR(t, cl, time.Second), waitDLR(t, cl, time.Second)
+	if dlrStat(t, a) != "ACCEPTD" || dlrStat(t, b) != "DELIVRD" {
+		t.Fatalf("DLRs %s then %s", dlrStat(t, a), dlrStat(t, b))
+	}
+	cl.submit(t, newSubmit(t, "no receipt wanted", 0))
+	waitResp(t, cl)
+	noDLR(t, cl, 400*time.Millisecond)
+
+	// With no receiver bound, both DLRs queue side by side and are delivered in order.
+	c.DLR.Timing, c.DLR.IntermediateMS = gateway.TimingImmediate, 0
+	m.Apply([]gateway.Config{c})
+	_ = cl.sess.Close()
+	tx := mustBind(t, c, "tx")
+	tx.submit(t, newSubmit(t, "queued", 0x01))
+	waitResp(t, tx)
+	for deadline := time.Now().Add(2 * time.Second); m.queue.TotalLen() != 2; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("queued %d DLRs, want 2", m.queue.TotalLen())
+		}
+	}
+	rx := mustBind(t, c, "rx")
+	if s1, s2 := dlrStat(t, waitDLR(t, rx, 2*time.Second)), dlrStat(t, waitDLR(t, rx, 2*time.Second)); s1 != "ACCEPTD" || s2 != "DELIVRD" {
+		t.Fatalf("queued DLRs %s then %s", s1, s2)
+	}
+}

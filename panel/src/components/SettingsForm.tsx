@@ -22,6 +22,7 @@ interface Props {
 export const DLR_KEYS: SettingKey[] = [
   "dlr_enabled", "dlr_timing", "dlr_delay_ms", "dlr_min_ms", "dlr_max_ms",
   "dlr_id_format", "dlr_date_seconds", "dlr_include_text", "dlr_include_tlvs",
+  "dlr_intermediate", "dlr_intermediate_status", "dlr_intermediate_delay_ms",
 ];
 export const LIMIT_KEYS: SettingKey[] = ["tps_limit", "tps_scope", "max_binds", "bind_types", "response_latency_ms"];
 
@@ -140,6 +141,38 @@ export function DlrFields(p: Props) {
       <Row p={p} k="dlr_include_tlvs" label="Include TLVs" info="dlrIncludeTlvs">
         {(id) => <YesNo id={id} value={value(p, "dlr_include_tlvs")} onChange={(v) => p.onChange("dlr_include_tlvs", v)} />}
       </Row>
+
+      <Row p={p} k="dlr_intermediate" label="Intermediate DLR" info="dlrIntermediate">
+        {(id) => (
+          <select id={id} className="input" value={value(p, "dlr_intermediate")} onChange={(e) => p.onChange("dlr_intermediate", e.target.value as Settings["dlr_intermediate"])}>
+            <option value="off">Off</option>
+            <option value="requested">When requested (registered_delivery bit 4)</option>
+            <option value="always">Always</option>
+          </select>
+        )}
+      </Row>
+      {value(p, "dlr_intermediate") === "off" ? (
+        <div />
+      ) : (
+        <>
+          <Row p={p} k="dlr_intermediate_status" label="Intermediate status" info="dlrIntermediateStatus">
+            {(id) => (
+              <select
+                id={id}
+                className="input"
+                value={value(p, "dlr_intermediate_status")}
+                onChange={(e) => p.onChange("dlr_intermediate_status", e.target.value as Settings["dlr_intermediate_status"])}
+              >
+                <option value="ENROUTE">ENROUTE</option>
+                <option value="ACCEPTD">ACCEPTD</option>
+              </select>
+            )}
+          </Row>
+          <Row p={p} k="dlr_intermediate_delay_ms" label="Intermediate delay (ms)" info="dlrIntermediateDelay" hint="0 = right after the submit_sm_resp">
+            {(id) => <input id={id} className="input" type="number" min={0} value={value(p, "dlr_intermediate_delay_ms")} onChange={(e) => p.onChange("dlr_intermediate_delay_ms", num(e.target.value))} />}
+          </Row>
+        </>
+      )}
     </div>
   );
 }
