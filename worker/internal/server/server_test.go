@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -18,7 +20,9 @@ import (
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/chtest"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/events"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/licensing"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/outcome"
+	"github.com/akshit-yadav/smpp_simulator/worker/pkg/licence"
 	"github.com/akshit-yadav/smpp_simulator/worker/pkg/smpp/pdu"
 )
 
@@ -841,5 +845,40 @@ func TestMORunResumesAfterRestart(t *testing.T) {
 	s := waitMOState(t, m2, 7, "finished")
 	if s.RunSent != 60 || int64(s.Dropped) != 60-saved {
 		t.Fatalf("after restart: run sent %d, this worker sent %d; want 60 and %d", s.RunSent, s.Dropped, 60-saved)
+	}
+}
+
+func TestLicenceLimits(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	lic := licensing.New(licensing.Options{PublicKey: pub}) // no licence: free tier
+	lic.SetShare(20)
+
+	// The backstop runs at most FreeGateways active gateways, lowest IDs first.
+	var cfgs []gateway.Config
+	for i := range licence.FreeGateways + 1 {
+		c := testConfig(t)
+		c.ID, c.Name = int64(i+1), fmt.Sprintf("gw%d", i+1)
+		cfgs = append(cfgs, c)
+	}
+	m := startManagerWith(t, Options{Licence: lic}, cfgs...)
+	st := m.Status()
+	if st[1].State != "listening" || st[int64(licence.FreeGateways)].State != "listening" || st[int64(licence.FreeGateways+1)].State != "stopped" {
+		t.Fatalf("status %+v", st)
+	}
+
+	// Over the worker's share of the licence TPS cap: ESME_RTHROTTLED, counted apart.
+	cl := mustBind(t, cfgs[0], "trx")
+	for range 60 {
+		cl.submit(t, newSubmit(t, "x", 0))
+	}
+	var throttled int
+	for range 60 {
+		if waitResp(t, cl).CommandStatus == data.ESME_RTHROTTLED {
+			throttled++
+		}
+	}
+	s := m.StatsSnapshot()[1]
+	if throttled < 35 || s.LicenceThrottled != uint64(throttled) || s.Throttled != 0 || s.Accepted != uint64(60-throttled) {
+		t.Fatalf("throttled %d, stats %+v", throttled, s)
 	}
 }

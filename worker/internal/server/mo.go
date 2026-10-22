@@ -140,8 +140,14 @@ func (gw *Gateway) moStep(run *moRun, now time.Time) *moRun {
 		due = min(due, cfg.StopAfterCount-run.sent)
 	}
 	for due > 0 {
+		m := run.builder.Next(run.seq+1, now)
+		if !gw.m.licence.Allow(len(m.Parts)) {
+			// Over the licence TPS cap: send no more this tick and pace from
+			// here, so the backlog is not sent as a burst later.
+			run.baseAt, run.baseSent = now, run.sent
+			break
+		}
 		run.seq++
-		m := run.builder.Next(run.seq, now)
 		gw.m.sendMO(gw, m, false)
 		run.sent += int64(len(m.Parts))
 		due -= int64(len(m.Parts))

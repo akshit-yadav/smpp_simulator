@@ -20,12 +20,14 @@ from psg_control.api import (
     gateways,
     health,
     internal,
+    licence,
     live,
     mo,
     reports,
     workers,
 )
 from psg_control.auth import bootstrap_admin
+from psg_control.licence import Ticker, install_from_file
 from psg_control.security import Cipher
 from psg_control.settings import Settings, get_settings
 from psg_control.stores import Stores
@@ -57,9 +59,14 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
         try:
             with Session(stores.db) as db:
                 bootstrap_admin(db, settings)
+            install_from_file(stores, settings.licence_file, settings.licence_require_both)
         except SQLAlchemyError as exc:
             log.warning("admin bootstrap skipped, database unavailable: %s", type(exc).__name__)
-        task = asyncio.create_task(scheduler.run(stores)) if run_scheduler else None
+        task = (
+            asyncio.create_task(scheduler.run(stores, app.state.licence_ticker, settings))
+            if run_scheduler
+            else None
+        )
         yield
         if task:
             task.cancel()
@@ -78,6 +85,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
     app.state.settings = settings
     app.state.stores = stores
     app.state.cipher = cipher
+    app.state.licence_ticker = Ticker()
 
     app.include_router(health.router)
     for module in (
@@ -85,6 +93,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
         workers,
         gateways,
         live,
+        licence,
         mo,
         reports,
         dlr_rules,

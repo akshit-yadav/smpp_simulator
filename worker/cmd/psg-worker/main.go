@@ -28,7 +28,9 @@ import (
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/events"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/heartbeat"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/licensing"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/server"
+	"github.com/akshit-yadav/smpp_simulator/worker/pkg/licence"
 )
 
 var version = "dev"
@@ -63,6 +65,16 @@ func main() {
 	defer rdb.Close()
 
 	workerInfo.WithLabelValues(strconv.Itoa(int(cfg.WorkerID)), cfg.WorkerIP, version).Set(1)
+	fp := licence.LocalFingerprint(cfg.MachineIDPath)
+	pub, err := licence.DecodePublicKey(licence.PublicKey)
+	if err != nil {
+		log.Error("built-in licence key is broken", "err", err)
+		os.Exit(2)
+	}
+	lic := licensing.New(licensing.Options{
+		PublicKey: pub, Fingerprint: fp, ClockPath: cfg.LicenceClock, RequireBoth: cfg.LicenceRequireBoth, Log: log,
+	})
+	go lic.Run(ctx)
 	go heartbeat.Run(ctx, rdb, heartbeat.Beat{
 		WorkerID:    cfg.WorkerID,
 		IP:          cfg.WorkerIP,
@@ -70,6 +82,8 @@ func main() {
 		PortRange:   cfg.PortRange.String(),
 		PortExclude: cfg.PortExclude,
 		StartedAt:   time.Now().UTC(),
+		MachineID:   fp.MachineID,
+		MAC:         fp.MAC,
 	}, 2*time.Second, log)
 
 	// Events get their own context: they stop after the manager, so the
@@ -108,10 +122,16 @@ func main() {
 		Registerer:  prometheus.DefaultRegisterer,
 		Log:         log,
 		Events:      rec,
+		Licence:     lic,
 	})
 	mgrDone := make(chan struct{})
 	go func() { mgr.Run(ctx); close(mgrDone) }()
 	if cfg.GatewaysFile != "" {
+		data, err := os.ReadFile(cfg.LicenceFile)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Error("licence file unreadable; free tier applies", "path", cfg.LicenceFile, "err", err)
+		}
+		lic.Apply(string(data), 1)
 		go gateway.WatchFile(ctx, cfg.GatewaysFile, 500*time.Millisecond, log, func(cfgs []gateway.Config) { mgr.Apply(cfgs) })
 	} else {
 		src := control.New(control.Options{
@@ -121,6 +141,7 @@ func main() {
 			Redis:     rdb,
 			CachePath: cfg.ConfigCache,
 			PortCheck: func(port int) error { return testBind(cfg, port) },
+			Licence:   lic,
 			Log:       log,
 		}, mgr)
 		go src.Run(ctx)

@@ -252,6 +252,12 @@ func (s *Session) handleSubmit(p pdu.Packet) {
 		s.recordSubmit(&sm, events.SubmitThrottled, pdu.ESME_RTHROTTLED, nil, 0)
 		return
 	}
+	if !s.m.licence.Allow(1) {
+		s.gw.stats.LicenceThrottled.Add(1)
+		s.respond(pdu.SubmitSMResp, pdu.ESME_RTHROTTLED, p.Sequence, nil)
+		s.recordSubmit(&sm, events.SubmitLicenceThrottled, pdu.ESME_RTHROTTLED, nil, 0)
+		return
+	}
 
 	o := rc.picker.Pick()
 	if !o.Accepted() {

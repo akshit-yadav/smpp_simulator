@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useLogout, useMe } from "../api/queries";
+import { useLicence, useLogout, useMe } from "../api/queries";
 import { LiveProvider } from "../lib/live";
+import { LicenceBanner } from "../pages/Licence";
 
 interface Item {
   to: string;
@@ -31,7 +32,7 @@ const NAV: { group: string; items: Item[] }[] = [
     group: "System",
     items: [
       { to: "/workers", label: "Workers" },
-      { to: "/licence", label: "Licence", soon: "M8" },
+      { to: "/licence", label: "Licence" },
       { to: "/settings", label: "Settings & audit" },
     ],
   },
@@ -68,6 +69,7 @@ export default function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(false);
+  const licence = useLicence();
 
   return (
     <LiveProvider>
@@ -111,6 +113,7 @@ export default function AppShell() {
             <strong>Power SMPP Gateway Simulator</strong>
           </header>
           <main className="main" key={location.pathname}>
+            {location.pathname !== "/licence" && <LicenceBanner s={licence.data} />}
             <Outlet />
             <Footer />
           </main>

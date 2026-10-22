@@ -22,6 +22,7 @@ const (
 	SubmitRejected
 	SubmitThrottled
 	SubmitInvalid
+	SubmitLicenceThrottled
 )
 
 type DLRResult uint8

@@ -148,6 +148,8 @@ class FakeWorker:
                     "version": "test",
                     "port_range": "20000-20099",
                     "port_exclude": list(exclude),
+                    "machine_id": f"mid-{worker_id}",
+                    "mac": f"mac-{worker_id}",
                 }
             ),
         )

@@ -27,6 +27,9 @@ type Beat struct {
 	PortExclude []int     `json:"port_exclude"`
 	StartedAt   time.Time `json:"started_at"`
 	TS          time.Time `json:"ts"`
+	// Licence fingerprint: SHA-256 of /etc/machine-id and of the default-route MAC.
+	MachineID string `json:"machine_id"`
+	MAC       string `json:"mac"`
 }
 
 // Key is the Redis key holding a worker's latest heartbeat.

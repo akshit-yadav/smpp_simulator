@@ -46,17 +46,21 @@ func (b *Bucket) Rate() float64 {
 }
 
 // Allow takes one token if available.
-func (b *Bucket) Allow() bool {
+func (b *Bucket) Allow() bool { return b.AllowN(1) }
+
+// AllowN takes n tokens if all are available (e.g. every part of a long
+// message), or none.
+func (b *Bucket) AllowN(n int) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.rate <= 0 {
 		return true
 	}
 	b.refill()
-	if b.tokens < 1 {
+	if b.tokens < float64(n) {
 		return false
 	}
-	b.tokens--
+	b.tokens -= float64(n)
 	return true
 }
 

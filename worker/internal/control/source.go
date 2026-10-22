@@ -10,6 +10,9 @@
 //     and reports each gateway's listener state to psg:gwstatus:<worker_id>.
 //   - Every second it publishes live counters (psg:stats:<worker_id>) and
 //     bound sessions (psg:sessions:<worker_id>) for the panel.
+//   - It passes the licence in the config to the licence enforcer, and every
+//     5 s reads this worker's share of the licence TPS cap
+//     (psg:licshare:<worker_id>) set by the control plane.
 package control
 
 import (
@@ -28,6 +31,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/licensing"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/server"
 )
 
@@ -38,6 +42,7 @@ type Options struct {
 	Redis     *redis.Client
 	CachePath string
 	PortCheck func(port int) error // range/exclusion policy plus a test bind
+	Licence   *licensing.Enforcer  // nil: no licence handling (tests)
 	Log       *slog.Logger
 
 	VersionCheck time.Duration // default 60 s
@@ -69,6 +74,14 @@ type Config struct {
 	WorkerID int               `json:"worker_id"`
 	Version  int64             `json:"version"`
 	Gateways []json.RawMessage `json:"gateways"`
+	Licence  *LicenceConfig    `json:"licence,omitempty"`
+}
+
+// LicenceConfig is the licence file as uploaded ("" = none) and the number
+// of active workers sharing its TPS cap.
+type LicenceConfig struct {
+	File    string `json:"file"`
+	Workers int    `json:"workers"`
 }
 
 func New(opt Options, mgr Manager) *Source {
@@ -107,6 +120,9 @@ func (s *Source) Run(ctx context.Context) {
 	status := time.NewTicker(15 * time.Second)
 	defer status.Stop()
 	go s.publishLive(ctx)
+	if s.opt.Licence != nil {
+		go s.followShare(ctx)
+	}
 	var retry <-chan time.Time
 	backoff := time.Second
 
@@ -260,6 +276,13 @@ func (s *Source) apply(ctx context.Context, c *Config, cache bool) {
 		}
 		cfgs = append(cfgs, g)
 	}
+	if s.opt.Licence != nil {
+		if c.Licence != nil {
+			s.opt.Licence.Apply(c.Licence.File, c.Licence.Workers)
+		} else {
+			s.opt.Licence.Apply("", 1)
+		}
+	}
 	s.mgr.Apply(cfgs)
 	if c.Version != s.version {
 		s.log.Info("config applied", "version", c.Version, "gateways", len(cfgs))
@@ -291,6 +314,7 @@ type LiveStats struct {
 	Gateways   map[int64]server.StatsSnapshot `json:"gateways"`
 	DLRPending int                            `json:"dlr_pending"`
 	DLRQueued  int                            `json:"dlr_queued"`
+	Licence    *licensing.Status              `json:"licence,omitempty"` // as this worker enforces it
 }
 
 func (s *Source) publishLive(ctx context.Context) {
@@ -303,9 +327,12 @@ func (s *Source) publishLive(ctx context.Context) {
 			return
 		case now := <-t.C:
 			pending, queued := s.mgr.Backlog()
-			stats, _ := json.Marshal(LiveStats{
-				TS: now.UnixMilli(), Gateways: s.mgr.StatsSnapshot(), DLRPending: pending, DLRQueued: queued,
-			})
+			live := LiveStats{TS: now.UnixMilli(), Gateways: s.mgr.StatsSnapshot(), DLRPending: pending, DLRQueued: queued}
+			if s.opt.Licence != nil {
+				st := s.opt.Licence.Status()
+				live.Licence = &st
+			}
+			stats, _ := json.Marshal(live)
 			sessions := s.mgr.Sessions()
 			if sessions == nil {
 				sessions = []server.SessionInfo{}
@@ -315,6 +342,27 @@ func (s *Source) publishLive(ctx context.Context) {
 			pipe.Set(ctx, "psg:stats:"+id, stats, 10*time.Second)
 			pipe.Set(ctx, "psg:sessions:"+id, sess, 10*time.Second)
 			_, _ = pipe.Exec(ctx) // best effort; never blocks traffic
+		}
+	}
+}
+
+// followShare reads this worker's share of the licence TPS cap every 5 s.
+// Without one (control plane down), the last share stays in force.
+func (s *Source) followShare(ctx context.Context) {
+	key := "psg:licshare:" + strconv.Itoa(int(s.opt.WorkerID))
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		var share struct {
+			TPS float64 `json:"tps"`
+		}
+		if raw, err := s.opt.Redis.Get(ctx, key).Result(); err == nil && json.Unmarshal([]byte(raw), &share) == nil && share.TPS > 0 {
+			s.opt.Licence.SetShare(share.TPS)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
 		}
 	}
 }

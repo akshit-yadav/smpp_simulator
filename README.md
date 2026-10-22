@@ -17,8 +17,8 @@ behaviour, MO traffic and TPS limit.
 | M5 Panel: login + TOTP, live dashboard, Gateway Manager (list/editor/detail, sessions with kill), DLR Rules with preview, error catalog, Gateway Defaults, workers, settings & audit | ✅ Done |
 | M6 Intermediate DLRs (ENROUTE/ACCEPTD before the final DLR: off, when requested, always) | ✅ Done |
 | M7 MO generator: rate or burst, schedule, sources/destinations, weighted templates, GSM7/UCS2, long messages, queue or drop, Send test MO, MO report | ✅ Done |
-| M8 Licensing | ⏳ Next |
-| M9 Hardening and acceptance | ⏳ Not started |
+| M8 Licensing: signed licences (Ed25519), machine fingerprints, gateway limit with suspension, global TPS cap shared by workers, expiry and clock checks, Licence screen, `licgen` | ✅ Done |
+| M9 Hardening and acceptance | ⏳ Next |
 | Next phase (deferred from M6): `submit_multi`, `data_sm`, `query_sm`, `cancel_sm`, `replace_sm`; conditional rules; live overrides; response latency | 🕓 Deferred |
 
 See [docs/build-prompt.md](docs/build-prompt.md) for the full scope.
@@ -85,8 +85,7 @@ Open http://127.0.0.1:8080/ and sign in as `admin` with the `PSG_ADMIN_PASSWORD`
 | Settings & audit | Change password, turn on TOTP (QR code), audit log of every change |
 | Reports | Traffic (submit_sm and DLRs by result, per gateway), DLR rule mix actual vs configured, DLR delay distribution, throttling, MO traffic, bind history; 1 h to 30 days; CSV export |
 | Message search | A message's submit_sm, DLR and MO events by message ID (hex or decimal), or recent traffic for a number |
-
-Licence appears in the menu with the milestone that delivers it.
+| Licence | Status and limits, upload/replace/remove, worker fingerprints and match, **Request licence** export, which gateways stay active when over the limit. A banner on every page warns of expiry, a wrong machine or suspended gateways |
 
 ## Manage gateways (REST API)
 
@@ -250,6 +249,39 @@ the same 1,000-PDU window, retries and queue as DLRs, does not count against the
 `submit_sm` TPS limit, and is recorded in `mo_events` (Reports → MO traffic, Message
 search). API: `GET/PUT /api/v1/gateways/{id}/mo`, `POST …/mo/start`, `…/mo/stop`,
 `…/mo/test`.
+
+## Licensing
+
+Without a valid licence the **free tier** applies: **10 gateways** and **1,000 TPS** in total
+(`submit_sm` plus MO, across all workers). These limits are constants in
+`worker/pkg/licence/licence.go` and `control/psg_control/licence.py`.
+
+A licence is a signed file (`.psglic`) with an ID, licensee, expiry, gateway and TPS
+limits, and the machines it covers. Each machine is identified by the SHA-256 of
+`/etc/machine-id` and of the MAC of the interface carrying the default route. A match on
+either is accepted, with a warning for a partial match. Set `PSG_LICENCE_REQUIRE_BOTH=true`
+to require both.
+
+- **Install:** Licence page → **Upload licence**, or `PUT /api/v1/licence {"licence": "<file text>"}`.
+  If no licence is installed, the control plane also installs `config/licence.psglic` on
+  start. A worker run from a static gateways file reads that same file (`PSG_LICENCE_FILE`).
+- **Get one:** Licence page → **Request licence** downloads every worker's fingerprint for HWPL.
+- **Gateways:** creating one more than the limit is refused. If the limit drops (expiry, a
+  smaller licence, removal), gateways beyond it become *suspended (licence)*: their listener
+  stops and sessions get an `unbind`. The oldest stay unless you pick others on the Licence
+  page. A new licence restores them within 5 s.
+- **TPS:** each worker has a token bucket for its share of the cap. The control plane
+  re-balances shares every 5 s by demand, with an even floor. Over the cap, `submit_sm` gets
+  `ESME_RTHROTTLED` and counts as **licence-throttled** (Reports → Throttling). MO slows down
+  instead.
+- **Expiry:** banner warnings from 30 days before. At expiry, or if the clock goes back more
+  than 24 h, the free tier applies.
+- **Backstop:** workers verify the licence themselves (signature, expiry, own machine) and
+  never run more gateways or a bigger TPS share than they verified.
+
+HWPL issues licences with `tools/licgen` (`keygen`, `sign`, `verify`, `fingerprint`; run it
+without arguments for usage). The private key must never be committed. Only the public key
+is in the code.
 
 ## Events and reports
 

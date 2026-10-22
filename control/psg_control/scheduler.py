@@ -1,4 +1,5 @@
-"""Background jobs run inside the control plane."""
+"""Background jobs run inside the control plane: ClickHouse schema, worker
+registry, and every 5 s the licence (gateway limit, TPS shares, clock)."""
 
 import asyncio
 import json
@@ -8,9 +9,10 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from psg_control import clickhouse
+from psg_control import clickhouse, licence
 from psg_control.api.workers import upsert_from_heartbeat
 from psg_control.auth import utcnow
+from psg_control.settings import Settings
 from psg_control.stores import Stores
 
 log = logging.getLogger(__name__)
@@ -32,7 +34,7 @@ def sync_worker_registry(stores: Stores) -> int:
     return len(beats)
 
 
-async def run(stores: Stores) -> None:
+async def run(stores: Stores, ticker: licence.Ticker, settings: Settings) -> None:
     failing = False
     schema_ready, schema_warned = False, False
     while True:
@@ -47,11 +49,12 @@ async def run(stores: Stores) -> None:
                 schema_warned = True
         try:
             await asyncio.to_thread(sync_worker_registry, stores)
+            await asyncio.to_thread(licence.tick, stores, ticker, settings.licence_require_both)
             if failing:
-                log.info("worker registry sync recovered")
+                log.info("worker registry and licence checks recovered")
             failing = False
         except (RedisError, SQLAlchemyError) as exc:
             if not failing:
-                log.warning("worker registry sync failing: %s", type(exc).__name__)
+                log.warning("worker registry and licence checks failing: %s", type(exc).__name__)
             failing = True
         await asyncio.sleep(REGISTRY_INTERVAL_S)

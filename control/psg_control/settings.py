@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     login_max_failures: int = 5
     lockout_minutes: int = 5
     port_check_timeout_s: float = 3.0
+    licence_require_both: bool = False  # refuse a partial machine match (shared with workers)
+    licence_file: str = "/etc/psg/licence.psglic"  # installed on start when none is installed
 
     mariadb_host: str = "127.0.0.1"
     mariadb_port: int = 3306

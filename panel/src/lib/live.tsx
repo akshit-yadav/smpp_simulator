@@ -36,7 +36,7 @@ function rates(prev: GatewayCounters | undefined, cur: GatewayCounters): Rates {
   const d = (k: keyof GatewayCounters) => Math.max(0, ((cur[k] as number) - (prev[k] as number)) / dt);
   r.accepted = d("accepted");
   r.rejected = d("rejected") + d("invalid");
-  r.throttled = d("throttled");
+  r.throttled = d("throttled") + (cur.licence_throttled === undefined ? 0 : d("licence_throttled"));
   r.dlr = d("dlr_sent");
   return r;
 }

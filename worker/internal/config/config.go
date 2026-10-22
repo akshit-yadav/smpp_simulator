@@ -39,6 +39,11 @@ type Config struct {
 	GatewaysFile   string // static gateway file; empty = get gateways from the control plane
 	ConfigCache    string // last config received from the control plane
 	ListenHost     string // "" = all interfaces
+
+	MachineIDPath      string // for the licence fingerprint
+	LicenceClock       string // clock high-water mark file
+	LicenceRequireBoth bool   // refuse a partial machine match
+	LicenceFile        string // with GatewaysFile only: the licence (the control plane sends it otherwise)
 }
 
 // PortAllowed checks a gateway port against the range and exclusion list.
@@ -100,6 +105,12 @@ func Load() (Config, error) {
 	c.GatewaysFile = env("PSG_GATEWAYS_FILE", "")
 	c.ConfigCache = env("PSG_CONFIG_CACHE", "/var/lib/psg/config-cache.json")
 	c.ListenHost = env("PSG_LISTEN_HOST", "")
+	c.MachineIDPath = env("PSG_MACHINE_ID_PATH", "/etc/machine-id")
+	c.LicenceClock = env("PSG_LICENCE_CLOCK", "/var/lib/psg/licence-clock")
+	c.LicenceFile = env("PSG_LICENCE_FILE", "/etc/psg/licence.psglic")
+	if c.LicenceRequireBoth, err = strconv.ParseBool(env("PSG_LICENCE_REQUIRE_BOTH", "false")); err != nil {
+		return c, fmt.Errorf("PSG_LICENCE_REQUIRE_BOTH: %w", err)
+	}
 
 	if err = c.LogLevel.UnmarshalText([]byte(env("PSG_LOG_LEVEL", "info"))); err != nil {
 		return c, fmt.Errorf("PSG_LOG_LEVEL: %w", err)

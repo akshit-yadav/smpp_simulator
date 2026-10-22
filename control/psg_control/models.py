@@ -82,6 +82,10 @@ class Worker(Base):
     config_version: Mapped[int] = mapped_column(BigInteger, default=1)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    # Licence fingerprint from the heartbeat: SHA-256 of /etc/machine-id and of
+    # the default-route MAC.
+    machine_id: Mapped[str | None] = mapped_column(String(64))
+    mac: Mapped[str | None] = mapped_column(String(64))
 
 
 class CommandStatus(Base):
@@ -211,6 +215,10 @@ class Gateway(Base):
     system_id: Mapped[str] = mapped_column(String(15))
     password_enc: Mapped[bytes] = mapped_column(VARBINARY(128))  # AES-256-GCM
     status: Mapped[str] = mapped_column(String(16), default="active")
+    # Suspended by the licence: the status to restore, and whether the admin
+    # picked this gateway to stay active when over the limit.
+    status_before_suspend: Mapped[str | None] = mapped_column(String(16))
+    licence_keep: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str] = mapped_column(Text, default="")
     version: Mapped[int] = mapped_column(BigInteger, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -269,3 +277,15 @@ class MOGenerator(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+class LicenceRow(Base):
+    """The uploaded licence (a single row, id = 1) and the clock high-water mark."""
+
+    __tablename__ = "licence"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    raw: Mapped[str | None] = mapped_column(Text)  # the licence file as uploaded
+    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime)
+    uploaded_by: Mapped[str | None] = mapped_column(String(64))
+    clock_high_water: Mapped[datetime | None] = mapped_column(DateTime)  # naive UTC

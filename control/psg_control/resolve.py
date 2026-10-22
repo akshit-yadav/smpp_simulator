@@ -1,7 +1,7 @@
 """Turns rows into effective settings and into the config workers consume
 (the JSON shape of the worker's gateway.Config)."""
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from psg_control.models import (
@@ -10,6 +10,7 @@ from psg_control.models import (
     DLRError,
     DLRRule,
     Gateway,
+    LicenceRow,
     MOGenerator,
     Worker,
 )
@@ -147,4 +148,12 @@ def worker_config(db: Session, cipher: Cipher, worker: Worker) -> dict:
         if rid not in rules:
             rules[rid] = outcome_config(db.get(DLRRule, rid), errors)
         gateways.append(gateway_config(gw, eff, rules[rid], cipher, mos.get(gw.id)))
-    return {"worker_id": worker.id, "version": worker.config_version, "gateways": gateways}
+    lic = db.get(LicenceRow, 1)
+    active = db.scalar(select(func.count()).select_from(Worker).where(Worker.status == "active"))
+    return {
+        "worker_id": worker.id,
+        "version": worker.config_version,
+        "gateways": gateways,
+        # The worker re-checks the licence itself (signature, expiry, machine).
+        "licence": {"file": (lic.raw if lic else None) or "", "workers": max(active, 1)},
+    }

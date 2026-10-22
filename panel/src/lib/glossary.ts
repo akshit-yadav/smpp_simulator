@@ -50,7 +50,7 @@ export const GLOSSARY = {
 
   // live views
   accepted: "submit_sm answered with ESME_ROK per second, across all binds.",
-  throttled: "submit_sm rejected with ESME_RTHROTTLED (0x58) per second because a TPS limit was exceeded.",
+  throttled: "submit_sm rejected with ESME_RTHROTTLED (0x58) per second because a gateway TPS limit or the licence TPS cap was exceeded.",
   rejected: "submit_sm rejected by the DLR rule or because the PDU was invalid, per second.",
   dlrsSent: "Delivery receipts sent to clients per second.",
   dlrScheduled: "DLRs waiting for their delay to pass before being sent.",
@@ -72,6 +72,14 @@ export const GLOSSARY = {
   moLong: "Share of messages sent as long (concatenated) messages of 2 or 3 parts, each with a UDH.",
   moNoReceiver: "When no RX or TRX session is bound: Queue keeps the MOs (like DLRs, up to 72 hours) and sends them when a receiver binds; Drop discards them and counts them as dropped.",
   moTest: "Sends one MO right away to a bound RX or TRX session. It is never queued: with no receiver bound it fails.",
+
+  // licence
+  licenceStatus: "Licensed: a valid licence covers every active worker's machine. Otherwise the free tier applies (its gateway and TPS limits), and gateways over the limit are suspended until a licence is installed.",
+  licenceTps: "The most submit_sm (plus MO) per second across all workers. Over it, submit_sm gets ESME_RTHROTTLED and counts as licence-throttled. Workers share the cap by demand, re-balanced every 5 seconds.",
+  licenceGateways: "The most gateways that can exist without being suspended (active and disabled ones count). The 11th gateway on the free tier cannot be created.",
+  licenceMatch: "Each worker's machine fingerprint (SHA-256 of /etc/machine-id and of the main network card's MAC address) must be in the licence. Full: both match. Partial: one matches (a warning; accepted unless both are required). None: the free tier applies.",
+  licenceKeep: "When there are more gateways than the licence allows, these stay active and the rest are suspended. Without a choice, the oldest stay.",
+  licenceRequest: "A file with every worker's fingerprint. Send it to Hex Wireless to get a licence for these machines.",
 
   // reports
   reportRetention: "Reports come from per-minute totals kept for 180 days. Bind history and message search use raw events, kept for 3 days.",

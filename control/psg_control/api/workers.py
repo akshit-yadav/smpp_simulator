@@ -88,5 +88,7 @@ def upsert_from_heartbeat(db, beat: dict, now: datetime) -> bool:
     w.port_min, w.port_max = int(lo), int(hi)
     w.port_exclude = beat.get("port_exclude") or []
     w.version = beat.get("version")
+    w.machine_id = beat.get("machine_id") or None
+    w.mac = beat.get("mac") or None
     w.last_seen = now
     return created

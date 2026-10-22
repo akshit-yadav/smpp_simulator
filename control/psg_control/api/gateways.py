@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from psg_control import audit, ports, resolve, sync
 from psg_control.api.deps import DB, Admin, CipherDep, StoresDep
+from psg_control.api.licence import check_capacity
 from psg_control.models import SETTING_COLUMNS, Defaults, DLRRule, Gateway, Worker
 from psg_control.schemas import GatewayCreate, GatewayOut, GatewayUpdate, RuleOut, Settings
 from psg_control.stores import Stores
@@ -158,6 +159,9 @@ def create_gateway(
     cipher: CipherDep,
 ):
     worker = pick_worker(db, body.worker_id)
+    check_capacity(
+        db, stores, request, "Upload a licence on the Licence page, or delete a gateway."
+    )
     name_conflict(db, body.name)
     check_rule(db, body.dlr_rule_id)
     raw = body.model_dump(include=set(SETTING_COLUMNS))
@@ -219,6 +223,9 @@ def update_gateway(
             raise HTTPException(status_code=422, detail=f"{required} cannot be null.")
     before = snapshot(gw)
     old_worker_id = gw.worker_id
+    if gw.status == "suspended" and "status" in fields:
+        check_capacity(db, stores, request, "Pick which gateways stay active on the Licence page.")
+        gw.status_before_suspend = None
 
     worker = gw.worker
     if "worker_id" in fields and body.worker_id is not None and body.worker_id != gw.worker_id:

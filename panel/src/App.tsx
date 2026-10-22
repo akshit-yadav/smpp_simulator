@@ -6,7 +6,6 @@ import { keys, useMe } from "./api/queries";
 import { Loading } from "./components/ui";
 import AppShell from "./layout/AppShell";
 import Catalog from "./pages/Catalog";
-import ComingSoon from "./pages/ComingSoon";
 import Dashboard from "./pages/Dashboard";
 import DlrRuleEdit from "./pages/DlrRuleEdit";
 import DlrRules from "./pages/DlrRules";
@@ -14,6 +13,7 @@ import GatewayDefaults from "./pages/GatewayDefaults";
 import GatewayDetail from "./pages/GatewayDetail";
 import GatewayEditor from "./pages/GatewayEditor";
 import Gateways from "./pages/Gateways";
+import Licence from "./pages/Licence";
 import Login from "./pages/Login";
 import MessageSearch from "./pages/MessageSearch";
 import Reports from "./pages/Reports";
@@ -64,10 +64,7 @@ export default function App() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="reports" element={<Reports />} />
         <Route path="search" element={<MessageSearch />} />
-        <Route
-          path="licence"
-          element={<ComingSoon title="Licence" milestone="M8" what="Upload a licence, see machine fingerprints and limits, export a licence request, and choose which gateways stay active." />}
-        />
+        <Route path="licence" element={<Licence />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -14,6 +14,7 @@ import (
 // counters published to the control plane; the hot path only does atomic adds.
 type Stats struct {
 	Accepted, Rejected, Throttled, Invalid            atomic.Uint64
+	LicenceThrottled                                  atomic.Uint64 // over the licence TPS cap
 	DLRSent, DLRAck, DLRRetried, DLRFailed, DLRQueued atomic.Uint64
 	DLRExpired, BindOK, BindFail                      atomic.Uint64
 	SessionsTX, SessionsRX, SessionsTRX               atomic.Int64
@@ -69,20 +70,21 @@ func (s *Stats) Sessions(bindType string) *atomic.Int64 {
 
 // StatsSnapshot is a point-in-time copy of Stats (cumulative counters).
 type StatsSnapshot struct {
-	Accepted   uint64           `json:"accepted"`
-	Rejected   uint64           `json:"rejected"`
-	Throttled  uint64           `json:"throttled"`
-	Invalid    uint64           `json:"invalid"`
-	DLRSent    uint64           `json:"dlr_sent"`
-	DLRAck     uint64           `json:"dlr_acknowledged"`
-	DLRRetried uint64           `json:"dlr_retried"`
-	DLRFailed  uint64           `json:"dlr_failed"`
-	DLRQueued  uint64           `json:"dlr_queued"`
-	DLRExpired uint64           `json:"dlr_expired"`
-	BindOK     uint64           `json:"bind_ok"`
-	BindFail   uint64           `json:"bind_failed"`
-	Sessions   map[string]int64 `json:"sessions"`
-	MO         MOSnapshot       `json:"mo"`
+	Accepted         uint64           `json:"accepted"`
+	Rejected         uint64           `json:"rejected"`
+	Throttled        uint64           `json:"throttled"`
+	LicenceThrottled uint64           `json:"licence_throttled"`
+	Invalid          uint64           `json:"invalid"`
+	DLRSent          uint64           `json:"dlr_sent"`
+	DLRAck           uint64           `json:"dlr_acknowledged"`
+	DLRRetried       uint64           `json:"dlr_retried"`
+	DLRFailed        uint64           `json:"dlr_failed"`
+	DLRQueued        uint64           `json:"dlr_queued"`
+	DLRExpired       uint64           `json:"dlr_expired"`
+	BindOK           uint64           `json:"bind_ok"`
+	BindFail         uint64           `json:"bind_failed"`
+	Sessions         map[string]int64 `json:"sessions"`
+	MO               MOSnapshot       `json:"mo"`
 }
 
 // MOSnapshot is the MO generator's state and cumulative MO counters.
@@ -101,7 +103,7 @@ type MOSnapshot struct {
 
 func (s *Stats) Snapshot() StatsSnapshot {
 	return StatsSnapshot{
-		Accepted: s.Accepted.Load(), Rejected: s.Rejected.Load(), Throttled: s.Throttled.Load(),
+		Accepted: s.Accepted.Load(), Rejected: s.Rejected.Load(), Throttled: s.Throttled.Load(), LicenceThrottled: s.LicenceThrottled.Load(),
 		Invalid: s.Invalid.Load(), DLRSent: s.DLRSent.Load(), DLRAck: s.DLRAck.Load(),
 		DLRRetried: s.DLRRetried.Load(), DLRFailed: s.DLRFailed.Load(), DLRQueued: s.DLRQueued.Load(),
 		DLRExpired: s.DLRExpired.Load(), BindOK: s.BindOK.Load(), BindFail: s.BindFail.Load(),
@@ -152,6 +154,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		count(c.submits, s.Rejected, "rejected")
 		count(c.submits, s.Throttled, "throttled")
 		count(c.submits, s.Invalid, "invalid")
+		count(c.submits, s.LicenceThrottled, "licence_throttled")
 		count(c.dlrs, s.DLRSent, "sent")
 		count(c.dlrs, s.DLRAck, "acknowledged")
 		count(c.dlrs, s.DLRRetried, "retried")

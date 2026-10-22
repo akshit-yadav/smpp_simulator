@@ -1,7 +1,7 @@
 // React Query hooks, one per resource. Mutations invalidate what they change.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { del, get, patch, post, put, qs } from "./client";
+import { api, del, get, patch, post, put, qs } from "./client";
 import type {
   AuditEntry,
   BindReport,
@@ -17,6 +17,7 @@ import type {
   Defaults,
   DlrError,
   Gateway,
+  LicenceSummary,
   Live,
   Me,
   DlrRule,
@@ -265,5 +266,23 @@ export function useMOAction(gatewayId: number) {
     start: useMutation({ mutationFn: () => post<MOOut>(`/gateways/${gatewayId}/mo/start`), onSuccess: done }),
     stop: useMutation({ mutationFn: () => post<MOOut>(`/gateways/${gatewayId}/mo/stop`), onSuccess: done }),
     test: useMutation({ mutationFn: (b: MOTest) => post<{ message_id: string }>(`/gateways/${gatewayId}/mo/test`, b) }),
+  };
+}
+
+// ---- licence -----------------------------------------------------------------------
+
+export const useLicence = () =>
+  useQuery({ queryKey: ["licence"], queryFn: () => get<LicenceSummary>("/licence"), refetchInterval: 15_000 });
+
+export function useLicenceAction() {
+  const qc = useQueryClient();
+  const done = (s: LicenceSummary) => {
+    qc.setQueryData(["licence"], s);
+    qc.invalidateQueries({ queryKey: keys.gateways });
+  };
+  return {
+    upload: useMutation({ mutationFn: (text: string) => put<LicenceSummary>("/licence", { licence: text }), onSuccess: done }),
+    remove: useMutation({ mutationFn: () => api<LicenceSummary>("DELETE", "/licence"), onSuccess: done }),
+    keep: useMutation({ mutationFn: (ids: number[]) => put<LicenceSummary>("/licence/keep", { gateway_ids: ids }), onSuccess: done }),
   };
 }

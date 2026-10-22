@@ -3,10 +3,12 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/events"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/gateway"
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/licensing"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/msgid"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/outcome"
 	"github.com/akshit-yadav/smpp_simulator/worker/internal/ratelimit"
@@ -30,7 +33,8 @@ type Options struct {
 	Redis       *redis.Client // nil: DLR queue is memory-only
 	Registerer  prometheus.Registerer
 	Log         *slog.Logger
-	Events      *events.Recorder // nil: no events
+	Events      *events.Recorder    // nil: no events
+	Licence     *licensing.Enforcer // nil: no licence limits (tests)
 
 	BindTimeout time.Duration // close if not bound in time
 	IdleTimeout time.Duration // close a bound session with no traffic
@@ -66,17 +70,19 @@ func (o *Options) defaults() {
 const wheelTick = 5 * time.Millisecond
 
 type Manager struct {
-	opt    Options
-	log    *slog.Logger
-	events *events.Recorder
-	ids    *msgid.Generator
-	wheel  *timewheel.Wheel[*dlrJob]
-	queue  *dlrQueue
+	opt     Options
+	log     *slog.Logger
+	events  *events.Recorder
+	licence *licensing.Enforcer
+	ids     *msgid.Generator
+	wheel   *timewheel.Wheel[*dlrJob]
+	queue   *dlrQueue
 
 	mu       sync.Mutex // serialises Apply and shutdown
 	gateways map[int64]*Gateway
 	status   map[int64]GatewayStatus
 	stats    map[int64]*Stats                   // by gateway ID; kept across listener restarts
+	capped   map[int64]bool                     // gateways held back by the licence backstop
 	byID     atomic.Pointer[map[int64]*Gateway] // lock-free snapshot for the hot path
 }
 
@@ -86,11 +92,13 @@ func NewManager(opt Options) *Manager {
 		opt:      opt,
 		log:      opt.Log,
 		events:   opt.Events,
+		licence:  opt.Licence,
 		ids:      msgid.New(opt.WorkerID),
 		wheel:    timewheel.New[*dlrJob](wheelTick, time.Now()),
 		gateways: map[int64]*Gateway{},
 		status:   map[int64]GatewayStatus{},
 		stats:    map[int64]*Stats{},
+		capped:   map[int64]bool{},
 	}
 	m.byID.Store(&map[int64]*Gateway{})
 	m.queue = newDLRQueue(opt.Redis, opt.Log)
@@ -113,6 +121,7 @@ func (m *Manager) Apply(cfgs []gateway.Config) []ApplyResult {
 	defer m.mu.Unlock()
 	defer m.publish()
 
+	cfgs = m.capGateways(cfgs)
 	var results []ApplyResult
 	want := map[int64]bool{}
 	for _, c := range cfgs {
@@ -181,6 +190,34 @@ func (m *Manager) applyOne(c gateway.Config) ApplyResult {
 		gw.update(rc)
 		return ApplyResult{ID: c.ID, Action: "updated"}
 	}
+}
+
+// capGateways is the licence backstop: beyond the licence's gateway limit
+// (checked by this worker itself), active gateways are run as suspended,
+// lowest IDs first. The control plane normally suspends them before this.
+func (m *Manager) capGateways(cfgs []gateway.Config) []gateway.Config {
+	limit := m.licence.MaxGateways()
+	if limit < 0 {
+		return cfgs
+	}
+	out := slices.Clone(cfgs)
+	slices.SortFunc(out, func(a, b gateway.Config) int { return cmp.Compare(a.ID, b.ID) })
+	active := 0
+	for i := range out {
+		if out[i].Status != gateway.StatusActive {
+			continue
+		}
+		if active++; active > limit {
+			if !m.capped[out[i].ID] {
+				m.log.Error("gateway over the licence limit; not started", "gateway_id", out[i].ID, "max_gateways", limit)
+			}
+			out[i].Status = gateway.StatusSuspended
+			m.capped[out[i].ID] = true
+		} else {
+			delete(m.capped, out[i].ID)
+		}
+	}
+	return out
 }
 
 // compile builds the runtime form of a config, reusing the previous picker

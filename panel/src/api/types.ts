@@ -154,6 +154,7 @@ export interface GatewayCounters {
   accepted: number;
   rejected: number;
   throttled: number;
+  licence_throttled?: number;
   invalid: number;
   dlr_sent: number;
   dlr_acknowledged: number;
@@ -412,4 +413,43 @@ export interface MoReport {
   to: string;
   step: number;
   rows: MoRow[];
+}
+
+// ---- licence (M8) --------------------------------------------------------------------
+
+export interface LicenceWorker {
+  id: number;
+  name: string;
+  online: boolean;
+  machine_id: string | null;
+  mac: string | null;
+  match: "full" | "partial" | "none" | null; // null: no licence to match
+}
+
+export interface LicenceSummary {
+  status: "licensed" | "free" | "expired" | "invalid" | "wrong_machine";
+  reason: string;
+  warning: string;
+  days_left: number | null;
+  max_gateways: number;
+  max_tps: number;
+  free_gateways: number;
+  free_tps: number;
+  require_both: boolean;
+  gateways_used: number;
+  suspended: { id: number; name: string }[];
+  kept: number[];
+  workers: LicenceWorker[];
+  licence: null | {
+    licence_id: string;
+    licensee: string;
+    issued_at: string;
+    expires_at: string;
+    max_gateways: number;
+    max_tps: number;
+    machines: { machine_id: string; mac: string; label?: string }[];
+    features: string[];
+    uploaded_at: string | null;
+    uploaded_by: string | null;
+  };
 }
