@@ -591,3 +591,20 @@ export interface TestError {
   status?: string;
   detail?: string;
 }
+
+// ---- footer resource usage -----------------------------------------------------------
+
+export interface SystemUsage {
+  ts: number;
+  server: {
+    cpus: number;
+    cpu_pct: number | null; // null until a second sample exists
+    load1: number;
+    mem_total_mb: number;
+    mem_used_mb: number;
+    mem_pct: number;
+    swap_total_mb: number;
+    swap_used_mb: number;
+  };
+  psg: { available: boolean; reason: string | null; cpu_pct: number | null; mem_mb: number | null };
+}

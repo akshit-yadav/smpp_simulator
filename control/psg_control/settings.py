@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     port_check_timeout_s: float = 3.0
     licence_require_both: bool = False  # refuse a partial machine match (shared with workers)
     licence_file: str = "/etc/psg/licence.psglic"  # installed on start when none is installed
+    # Footer usage figures: host /proc, and the host's cgroup tree (mounted
+    # read-only) holding PSG's containers in psg.slice.
+    proc_root: str = "/proc"
+    cgroup_root: str = "/host/cgroup"
+    cgroup_slice: str = "psg.slice"
 
     mariadb_host: str = "127.0.0.1"
     mariadb_port: int = 3306

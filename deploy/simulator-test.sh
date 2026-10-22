@@ -11,7 +11,9 @@
 #   4. the tester's temporary PDU trace is gone after the run,
 #   5. a second tester that only reaches the control plane over HTTP (as on
 #      another machine) registers and runs a test,
-#   6. the workers' token is refused on the tester API.
+#   6. the workers' token is refused on the tester API,
+#   7. the footer's PSG figures come from the stack's cgroup slice and match
+#      docker stats.
 #
 #   deploy/simulator-test.sh [--tps N] [--duration S] [--keep] [--force]
 #
@@ -63,13 +65,16 @@ EOF
 cat >"$OVR" <<'EOF'
 services:
   control:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     environment:
       PSG_HTTP_PORT: "18091"
+      PSG_CGROUP_SLICE: psgtest.slice
       PSG_MARIADB_PORT: "13308"
       PSG_REDIS_PORT: "16381"
       PSG_CLICKHOUSE_HTTP_PORT: "18125"
     mem_limit: 512m
   worker:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     environment:
       PSG_CONTROL_URL: http://127.0.0.1:18091
       PSG_WORKER_METRICS_ADDR: 127.0.0.1:19119
@@ -78,14 +83,18 @@ services:
       PSG_CLICKHOUSE_HTTP_PORT: "18125"
     mem_limit: 512m
   tester:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     environment:
       PSG_CONTROL_URL: http://127.0.0.1:18091
       PSG_TESTER_NAME: local-tester
   mariadb:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     mem_limit: 768m
   redis:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     mem_limit: 256m
   clickhouse:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     mem_limit: 1536m
 EOF
 DC=(docker compose -p psgs --env-file "$ENVF" -f docker-compose.yml -f "$OVR" --profile bundled)
@@ -171,6 +180,13 @@ WITHOUT_SIM=$(traffic '')
 TRACE_LEFT=$(docker cp psgs-tester-1:/tmp/psg-tester - 2>/dev/null | tar -t 2>/dev/null | grep -cv '/$' || true)
 ERRLOG=$(api "$HTTP/tests/$RUN/errors" | jget 'len(d["errors"])')
 
+# ---- footer usage figures --------------------------------------------------------
+api "$HTTP/system/usage" >/dev/null # first sample
+sleep 3
+read -r U_AVAIL U_MEM U_CPU U_SRV < <(api "$HTTP/system/usage" | jget '" ".join(str(x) for x in (d["psg"]["available"], d["psg"]["mem_mb"], d["psg"]["cpu_pct"], d["server"]["mem_used_mb"]))')
+STACK_MB=$(docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' | awk '/^psgs-/ {v=$2; u=v; gsub(/[0-9.]/,"",u); gsub(/[A-Za-z]/,"",v); if (u=="GiB") v*=1024; else if (u=="KiB") v/=1024; s+=v} END {print int(s)}')
+U_MS=$(curl -s -o /dev/null -w '%{time_total}' -b "$COOKIES" "$HTTP/system/usage" | python3 -c "import sys; print(round(float(sys.stdin.read()) * 1000))")
+
 # ---- 5: a tester reaching the control plane over HTTP only ----------------------
 log "test 2: a second tester with only the control plane URL and the tester token"
 docker run -d --name "$REMOTE" --network host --memory 256m \
@@ -199,5 +215,7 @@ check "reports leave simulator traffic out" "$([ "$WITHOUT_SIM" = 0 ] && [ "$WIT
 check "PDU trace deleted after the run" "$([ "$TRACE_LEFT" = 0 ] && echo 0 || echo 1)" "$TRACE_LEFT files left"
 check "tester over HTTP only (remote setup)" "$([ "$R2_STATUS" = done ] && [ "$R2_OK" = "$R2_SENT" ] && [ "$R2_SENT" -gt 1900 ] && echo 0 || echo 1)" \
   "status $R2_STATUS, sent $R2_SENT, ok $R2_OK"
+check "footer: PSG usage from its cgroup slice" "$([ "$U_AVAIL" = True ] && [ "$U_CPU" != None ] && python3 -c "import sys; sys.exit(0 if abs($U_MEM - $STACK_MB) <= max(150, $STACK_MB * 0.25) else 1)" && echo 0 || echo 1)" \
+  "PSG $U_MEM MB (docker stats $STACK_MB MB), CPU $U_CPU%, server $U_SRV MB used, endpoint ${U_MS} ms"
 check "workers' token refused on the tester API" "$([ "$TOKEN_CODE" = 401 ] && echo 0 || echo 1)" "HTTP $TOKEN_CODE"
 exit $FAILED

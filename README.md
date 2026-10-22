@@ -252,6 +252,21 @@ the same 1,000-PDU window, retries and queue as DLRs, does not count against the
 search). API: `GET/PUT /api/v1/gateways/{id}/mo`, `POST …/mo/start`, `…/mo/stop`,
 `…/mo/test`.
 
+## Status bar (CPU and RAM)
+
+A bar at the bottom of every panel page shows this server's CPU, RAM and swap, and PSG's
+share: every PSG container on the server (control, worker, tester and, if bundled, PSG's
+MariaDB, Redis and ClickHouse). Shared databases already on the host are not counted as PSG.
+Values from 80% read "high", from 90% "very high", and "swap growing" warns of the memory
+pressure that took the lab server down on 2026-10-21.
+
+It costs next to nothing. The compose file puts every PSG container in the `psg.slice`
+cgroup (`cgroup_parent`), where the kernel keeps the totals. The control plane reads them,
+and `/proc` for the server, from a read-only mount (`/sys/fs/cgroup:/host/cgroup:ro`), only
+when the panel asks: every 5 s while it is open, cached for 2 s, about half a millisecond per
+read. Containers started from an older compose file are not in the slice: recreate them
+(`docker compose up -d`). Until then the bar shows PSG as "not measured".
+
 ## Gateway tester (SMPP client simulator)
 
 **Gateway tester** in the panel runs PSG's own SMPP client against listening gateways:
@@ -261,6 +276,9 @@ window, DLR request (none, final, or with intermediate DLRs), text, and two kind
 - **Network delay**, added to every PDU each way, fixed or random (like a distant link)
 - **Client response delay**, before each `deliver_sm_resp` (like a slow platform; it exercises
   PSG's DLR window, timeouts and retries)
+
+**Re-test** in the history opens the form with an earlier test's settings (gateways that no
+longer listen are left out), ready to adjust and start.
 
 The run shows live sent/accepted/error rates and p50/p99 response times. The result has
 totals, per gateway and per session, response-time percentiles, DLR counts, error

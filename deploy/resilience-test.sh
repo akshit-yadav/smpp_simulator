@@ -66,13 +66,16 @@ EOF
 cat >"$OVR" <<'EOF'
 services:
   control:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     environment:
       PSG_HTTP_PORT: "18090"
+      PSG_CGROUP_SLICE: psgtest.slice
       PSG_MARIADB_PORT: "13307"
       PSG_REDIS_PORT: "16380"
       PSG_CLICKHOUSE_HTTP_PORT: "18124"
     mem_limit: 512m
   worker:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     environment:
       PSG_CONTROL_URL: http://127.0.0.1:18090
       PSG_WORKER_METRICS_ADDR: 127.0.0.1:19118
@@ -81,13 +84,17 @@ services:
       PSG_CLICKHOUSE_HTTP_PORT: "18124"
     mem_limit: 512m
   tester:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     environment:
       PSG_CONTROL_URL: http://127.0.0.1:18090
   mariadb:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     mem_limit: 768m
   redis:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     mem_limit: 256m
   clickhouse:
+    cgroup_parent: psgtest.slice  # keep test stacks out of the live PSG figure
     mem_limit: 1536m
 EOF
 DC=(docker compose -p psgr --env-file "$ENVF" -f docker-compose.yml -f "$OVR" --profile bundled)

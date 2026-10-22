@@ -22,25 +22,32 @@ const clockFmt = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-di
 export default function TesterPage() {
   const { id } = useParams();
   const runId = id ? Number(id) : null;
-  const [creating, setCreating] = useState(false);
+  // null: no form; {}: a new test; {from}: a re-test of an earlier run
+  const [form, setForm] = useState<{ from?: TestRunOut } | null>(null);
   return (
     <>
       <PageHead
         title="Gateway tester"
         sub={<Term info="tester">Stress-test PSG's own gateways with its SMPP client simulator.</Term>}
         actions={
-          !creating && (
-            <button type="button" className="btn primary" onClick={() => setCreating(true)}>
+          !form && (
+            <button type="button" className="btn primary" onClick={() => setForm({})}>
               New test
             </button>
           )
         }
       />
       <div className="stack">
-        {creating && <NewTest onClose={() => setCreating(false)} />}
+        {form && <NewTest key={form.from?.id ?? "new"} from={form.from} onClose={() => setForm(null)} />}
         {runId !== null && <RunView id={runId} />}
         <Testers />
-        <History current={runId} />
+        <History
+          current={runId}
+          onRetest={(r) => {
+            setForm({ from: r });
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          }}
+        />
       </div>
     </>
   );
@@ -169,22 +176,39 @@ const DEFAULT_SPEC: TestSpec = {
   trace: true,
 };
 
-function NewTest({ onClose }: { onClose: () => void }) {
+/** The settings of an earlier run, for Re-test. */
+function specFrom(r: TestRunOut): TestSpec {
+  const { targets, ...rest } = r.spec;
+  return {
+    ...DEFAULT_SPEC,
+    ...rest,
+    gateway_ids: targets.map((t) => t.gateway_id),
+    tester_id: r.tester_id ?? undefined,
+    keep_errors: r.keep_errors,
+  };
+}
+
+function NewTest({ from, onClose }: { from?: TestRunOut; onClose: () => void }) {
   const testers = useTesters();
   const gateways = useGateways();
   const act = useTestActions();
   const toast = useToast();
   const navigate = useNavigate();
-  const [f, setF] = useState<TestSpec>(DEFAULT_SPEC);
+  const [f, setF] = useState<TestSpec>(() => (from ? specFrom(from) : DEFAULT_SPEC));
   const [error, setError] = useState<unknown>(null);
   const set = <K extends keyof TestSpec>(k: K, v: TestSpec[K]) => setF((x) => ({ ...x, [k]: v }));
   const online = (testers.data ?? []).filter((t) => t.online);
   const listening = (gateways.data ?? []).filter((g) => g.status === "active" && g.runtime?.state === "listening");
+  const listeningIds = new Set(listening.map((g) => g.id));
+  const gatewayIds = f.gateway_ids.filter((id) => listeningIds.has(id));
+  // A re-test keeps its tester only while that tester is online.
+  const testerId = online.some((t) => t.id === f.tester_id) ? f.tester_id : online[0]?.id;
+  const gone = gateways.data && from ? from.spec.targets.filter((t) => !listeningIds.has(t.gateway_id)).map((t) => t.name) : [];
 
   const start = async () => {
     setError(null);
     try {
-      const run = await act.start.mutateAsync({ ...f, tester_id: f.tester_id ?? online[0]?.id });
+      const run = await act.start.mutateAsync({ ...f, gateway_ids: gatewayIds, tester_id: testerId });
       (run.warnings ?? []).forEach((w) => toast(w, true));
       toast(`Test ${run.id} queued`);
       onClose();
@@ -195,11 +219,11 @@ function NewTest({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <Card title="New test">
+    <Card title={from ? `New test (from test ${from.id})` : "New test"}>
       <div className="stack" style={{ gap: 14 }}>
         <div className="form-grid">
           <Field label="Tester" info="tester">
-            <select className="input" value={f.tester_id ?? online[0]?.id ?? ""} onChange={(e) => set("tester_id", Number(e.target.value))}>
+            <select className="input" value={testerId ?? ""} onChange={(e) => set("tester_id", Number(e.target.value))}>
               {online.length === 0 && <option value="">No tester online</option>}
               {online.map((t) => (
                 <option key={t.id} value={t.id} disabled={!!t.running_run}>
@@ -241,6 +265,11 @@ function NewTest({ onClose }: { onClose: () => void }) {
             </div>
           )}
         </Field>
+        {gone.length > 0 && (
+          <div className="alert warning">
+            Not listening any more, so left out: {gone.join(", ")}.
+          </div>
+        )}
 
         <div className="form-grid">
           <Field label="TPS (total)" info="testTps">
@@ -287,14 +316,14 @@ function NewTest({ onClose }: { onClose: () => void }) {
         </div>
         <ErrorBox error={error} />
         <div className="row">
-          <button type="button" className="btn primary" disabled={act.start.isPending || !f.gateway_ids.length || !online.length} onClick={start}>
+          <button type="button" className="btn primary" disabled={act.start.isPending || !gatewayIds.length || !online.length} onClick={start}>
             {act.start.isPending ? "Starting…" : "Start test"}
           </button>
           <button type="button" className="btn" onClick={onClose}>
             Cancel
           </button>
           <span className="muted small">
-            {fmtNum(f.gateway_ids.length * f.sessions * (f.bind_type === "tx_rx" ? 2 : 1))} sessions, about {fmtNum(Math.round(f.tps * Math.max(0, f.duration_s - f.ramp_up_s / 2)))} submit_sm
+            {fmtNum(gatewayIds.length * f.sessions * (f.bind_type === "tx_rx" ? 2 : 1))} sessions, about {fmtNum(Math.round(f.tps * Math.max(0, f.duration_s - f.ramp_up_s / 2)))} submit_sm
           </span>
         </div>
       </div>
@@ -609,7 +638,7 @@ function DownloadButtons({ r, res }: { r: TestRunOut; res: TestResult }) {
 
 // ---- history -----------------------------------------------------------------------
 
-function History({ current }: { current: number | null }) {
+function History({ current, onRetest }: { current: number | null; onRetest: (r: TestRunOut) => void }) {
   const q = useTests();
   const act = useTestActions();
   const toast = useToast();
@@ -653,7 +682,12 @@ function History({ current }: { current: number | null }) {
                   <td className="num mono">{r.summary ? fmtNum(r.summary.sent) : "—"}</td>
                   <td className="num mono">{r.summary ? fmtNum(r.summary.ok) : "—"}</td>
                   <td className="num mono">{r.summary ? fmtNum(r.summary.errors) : "—"}</td>
-                  <td>
+                  <td className="nowrap">
+                    {r.status !== "queued" && (
+                      <button type="button" className="btn sm" title="A new test with these settings" onClick={() => onRetest(r)}>
+                        Re-test
+                      </button>
+                    )}{" "}
                     {r.status !== "queued" && r.status !== "running" && (
                       <ConfirmButton
                         small

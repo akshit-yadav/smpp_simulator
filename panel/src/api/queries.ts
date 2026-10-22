@@ -18,6 +18,7 @@ import type {
   DlrError,
   Gateway,
   LicenceSummary,
+  SystemUsage,
   TestError,
   Tester,
   TestRunOut,
@@ -322,3 +323,10 @@ export function useTestActions() {
     remove: useMutation({ mutationFn: (id: number) => del(`/tests/${id}`), onSuccess: refresh }),
   };
 }
+
+// ---- footer resource usage -------------------------------------------------------
+
+/** Polled every 5 s, and not at all while the tab is hidden (React Query
+ * pauses intervals in the background). */
+export const useSystemUsage = () =>
+  useQuery({ queryKey: ["system-usage"], queryFn: () => get<SystemUsage>("/system/usage"), refetchInterval: 5000, retry: false });

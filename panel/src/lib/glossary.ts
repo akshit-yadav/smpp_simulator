@@ -95,6 +95,9 @@ export const GLOSSARY = {
   bindRtt: "Time for the bind to be answered, before any added delay: the real network round trip between the tester and PSG.",
   includeSimulator: "Traffic from PSG's own client simulator is left out of reports unless this is ticked.",
 
+  // footer
+  usage: "This server's CPU and RAM, and PSG's share of them: every PSG container here (control, worker, tester and, if bundled, its MariaDB, Redis and ClickHouse). CPU is a percentage of all cores. Refreshed every 5 seconds, only while the panel is open. Watch swap: a server that runs out of memory and swaps hard can stop answering (as on 2026-10-21).",
+
   // reports
   reportRetention: "Reports come from per-minute totals kept for 180 days. Bind history and message search use raw events, kept for 3 days.",
   ruleMix: "The share of messages each DLR rule entry actually got, against the share configured in the rule. Only messages that reached the rule count: throttled and invalid submit_sm never do.",

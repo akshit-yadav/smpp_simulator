@@ -9,6 +9,11 @@
 # bridge networking and publish on 127.0.0.1 only, on non-default ports, so they
 # never clash with stores that already run on the host.
 #
+# Every PSG container runs in the psg.slice cgroup, so the panel footer can
+# show PSG's CPU and RAM (all of them, bundled stores included) apart from the
+# rest of the server; the control service reads it from a read-only mount.
+# (No "-" in slice names: systemd nests "a-b.slice" inside "a.slice".)
+#
 # There is deliberately no depends_on between psg-* and the stores: the stores
 # live in an optional profile, and both services must tolerate stores being down.
 
@@ -23,8 +28,10 @@ services:
     network_mode: host
     env_file: .env
     restart: unless-stopped
+    cgroup_parent: psg.slice
     volumes:
       - ./config:/etc/psg:ro               # licence.psglic, installed on start if none is
+      - /sys/fs/cgroup:/host/cgroup:ro     # PSG's CPU/RAM (psg.slice) for the panel footer
     healthcheck:
       test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('PSG_HTTP_PORT','8080')}/healthz\", timeout=2)"]
       interval: 10s
@@ -41,6 +48,7 @@ services:
     network_mode: host
     env_file: .env
     restart: unless-stopped
+    cgroup_parent: psg.slice
     ulimits:
       nofile: { soft: 1048576, hard: 1048576 }
     volumes:
@@ -67,6 +75,7 @@ services:
     network_mode: host
     env_file: .env
     restart: unless-stopped
+    cgroup_parent: psg.slice
     mem_limit: 512m
     ulimits:
       nofile: { soft: 1048576, hard: 1048576 }
@@ -77,6 +86,7 @@ services:
     profiles: [bundled]
     image: mariadb:10.11
     restart: unless-stopped
+    cgroup_parent: psg.slice
     environment:
       MARIADB_ROOT_PASSWORD: ${BUNDLED_MARIADB_ROOT_PASSWORD:?set BUNDLED_MARIADB_ROOT_PASSWORD in .env}
       MARIADB_DATABASE: ${PSG_MARIADB_DATABASE:-psg}
@@ -97,6 +107,7 @@ services:
     profiles: [bundled]
     image: redis:7.2-alpine
     restart: unless-stopped
+    cgroup_parent: psg.slice
     # AOF on: queued DLRs are persisted to Redis (one hash per gateway).
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${PSG_REDIS_PASSWORD:?set PSG_REDIS_PASSWORD in .env}"]
     ports:
@@ -115,6 +126,7 @@ services:
     profiles: [bundled]
     image: clickhouse/clickhouse-server:24.8
     restart: unless-stopped
+    cgroup_parent: psg.slice
     environment:
       CLICKHOUSE_DB: ${PSG_CLICKHOUSE_DATABASE:-psg}
       CLICKHOUSE_USER: ${PSG_CLICKHOUSE_USER:-psg}

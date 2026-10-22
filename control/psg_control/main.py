@@ -24,6 +24,7 @@ from psg_control.api import (
     live,
     mo,
     reports,
+    system,
     tests,
     workers,
 )
@@ -32,6 +33,7 @@ from psg_control.licence import Ticker, install_from_file
 from psg_control.security import Cipher
 from psg_control.settings import Settings, get_settings
 from psg_control.stores import Stores
+from psg_control.usage import Usage
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +89,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
     app.state.stores = stores
     app.state.cipher = cipher
     app.state.licence_ticker = Ticker()
+    app.state.usage = Usage(settings.proc_root, settings.cgroup_root, settings.cgroup_slice)
 
     app.include_router(health.router)
     for module in (
@@ -98,6 +101,7 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
         mo,
         reports,
         tests,
+        system,
         dlr_rules,
         catalog,
         defaults,
