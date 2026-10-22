@@ -122,6 +122,6 @@ def runtime_status(stores: Stores, worker_id: int) -> dict[int, dict]:
 def forget_gateway(stores: Stores, gateway_id: int) -> None:
     """Drops a deleted gateway's persisted DLR queue (best effort)."""
     try:
-        stores.redis.delete(f"psg:dlrq:{gateway_id}")
+        stores.redis.unlink(f"psg:dlrh:{gateway_id}")
     except RedisError as exc:
         log.warning("could not delete DLR queue of gateway %s: %s", gateway_id, type(exc).__name__)

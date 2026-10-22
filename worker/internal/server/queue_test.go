@@ -34,13 +34,13 @@ func TestQueuePersistsAndRestores(t *testing.T) {
 	}
 	q.pop(9, 500) // popped before ever being persisted: must not reach Redis
 	q.persist(ctx)
-	if n := rdb.XLen(ctx, streamKey(9)).Val(); n != 2000 {
-		t.Fatalf("stream length %d, want 2000", n)
+	if n := rdb.HLen(ctx, queueKey(9)).Val(); n != 2000 {
+		t.Fatalf("hash length %d, want 2000", n)
 	}
 	q.pop(9, 1000)
 	q.persist(ctx) // deletes the popped entries
-	if n := rdb.XLen(ctx, streamKey(9)).Val(); n != 1000 {
-		t.Fatalf("stream length after pop %d, want 1000", n)
+	if n := rdb.HLen(ctx, queueKey(9)).Val(); n != 1000 {
+		t.Fatalf("hash length after pop %d, want 1000", n)
 	}
 
 	// A fresh worker restores the remaining 1000, in order.
@@ -54,8 +54,65 @@ func TestQueuePersistsAndRestores(t *testing.T) {
 		t.Fatalf("restored jobs %d..%d", jobs[0].MsgID, jobs[999].MsgID)
 	}
 	q2.persist(ctx)
-	if n := rdb.XLen(ctx, streamKey(9)).Val(); n != 0 {
-		t.Fatalf("stream not emptied: %d", n)
+	if n := rdb.HLen(ctx, queueKey(9)).Val(); n != 0 {
+		t.Fatalf("hash not emptied: %d", n)
+	}
+}
+
+// A round trip can time out after Redis applied it. Resending it (here, the
+// whole queue twice over) must not duplicate jobs, and a job popped and queued
+// again before the next persist must stay stored.
+func TestQueueResendIsIdempotent(t *testing.T) {
+	rdb := testRedis(t)
+	ctx := context.Background()
+	q := newDLRQueue(rdb, slog.Default())
+	base := time.Now()
+	for i := range 25_000 { // more than one round trip
+		q.push(&dlrJob{GatewayID: 4, MsgID: uint64(i), QueuedAt: base.Add(time.Duration(i))})
+	}
+	q.persist(ctx)
+	g := q.gws[4]
+	g.unsaved = append(g.unsaved, g.items...) // as if every reply had been lost
+	g.unsaved = append(g.unsaved, g.items...)
+	q.persist(ctx)
+	if n := rdb.HLen(ctx, queueKey(4)).Val(); n != 25_000 {
+		t.Fatalf("hash length %d, want 25000", n)
+	}
+
+	j := q.pop(4, 1)[0]
+	q.push(j) // e.g. its receiver unbound before sending it
+	q.persist(ctx)
+	if !rdb.HExists(ctx, queueKey(4), queueField(j)).Val() {
+		t.Fatal("re-queued job was deleted")
+	}
+
+	q2 := newDLRQueue(rdb, slog.Default())
+	q2.restore(4)
+	jobs := q2.pop(4, 25_000)
+	if len(jobs) != 25_000 || jobs[0].MsgID != 0 || jobs[24_999].MsgID != 24_999 {
+		t.Fatalf("restored %d jobs, first %d last %d", len(jobs), jobs[0].MsgID, jobs[len(jobs)-1].MsgID)
+	}
+}
+
+func TestQueuePersistFailurePutsWorkBack(t *testing.T) {
+	rdb := testRedis(t)
+	q := newDLRQueue(rdb, slog.Default())
+	for i := range 10 {
+		q.push(&dlrJob{GatewayID: 2, MsgID: uint64(i)})
+	}
+	q.persist(context.Background())
+	q.pop(2, 4) // 4 deletes pending
+	q.push(&dlrJob{GatewayID: 2, MsgID: 100})
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	q.persist(cancelled)
+	if g := q.gws[2]; len(g.toDelete) != 4 || len(g.unsaved) != 1 {
+		t.Fatalf("put back %d deletes, %d adds; want 4, 1", len(g.toDelete), len(g.unsaved))
+	}
+	q.persist(context.Background())
+	if n := rdb.HLen(context.Background(), queueKey(2)).Val(); n != 7 {
+		t.Fatalf("hash length %d, want 7", n)
 	}
 }
 

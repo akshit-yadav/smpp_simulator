@@ -234,23 +234,38 @@ func (m *Manager) gateway(id int64) *Gateway { return (*m.byID.Load())[id] }
 // Run drives the DLR timing wheel and the DLR queue until ctx is done, then
 // stops every gateway.
 func (m *Manager) Run(ctx context.Context) {
+	persistDone := make(chan struct{})
+	go func() { defer close(persistDone); m.persistLoop(ctx) }()
+
 	tick := time.NewTicker(wheelTick)
 	defer tick.Stop()
 	drain := time.NewTicker(200 * time.Millisecond)
 	defer drain.Stop()
-	persist := time.NewTicker(time.Second)
-	defer persist.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			<-persistDone
 			m.shutdown()
 			return
 		case now := <-tick.C:
 			m.wheel.Advance(now, m.dispatch)
 		case <-drain.C:
 			m.drainQueues()
-		case <-persist.C:
+		}
+	}
+}
+
+// persistLoop mirrors the DLR queue to Redis once a second. It runs apart
+// from Run so a slow Redis never holds up the timing wheel.
+func (m *Manager) persistLoop(ctx context.Context) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
 			m.queue.persist(ctx)
 		}
 	}

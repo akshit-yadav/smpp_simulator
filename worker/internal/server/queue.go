@@ -1,24 +1,38 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/akshit-yadav/smpp_simulator/worker/internal/msgid"
 )
 
-const maxQueuedPerGateway = 2_000_000
+const (
+	maxQueuedPerGateway = 2_000_000
+	persistBatch        = 500             // jobs or IDs per HSET/HDEL
+	persistPipeline     = 20              // commands per round trip, so at most 10,000 jobs
+	persistTimeout      = 5 * time.Second // per round trip
+)
 
-func streamKey(gatewayID int64) string { return "psg:dlrq:" + strconv.FormatInt(gatewayID, 10) }
+func queueKey(gatewayID int64) string { return "psg:dlrh:" + strconv.FormatInt(gatewayID, 10) }
+
+func queueField(j *dlrJob) string { return msgid.Hex(j.MsgID) }
 
 // dlrQueue holds DLRs for gateways with no receiver bound. Jobs live in
 // memory; a background persist (once a second, never on the hot path) mirrors
-// them to one Redis stream per gateway so they survive a worker restart.
+// them to one Redis hash per gateway, keyed by message ID, so they survive a
+// worker restart. Every write is an HSET or HDEL by message ID, so a round
+// trip that timed out after Redis applied it can be resent without creating
+// duplicates.
 type dlrQueue struct {
 	rdb *redis.Client
 	log *slog.Logger
@@ -27,20 +41,19 @@ type dlrQueue struct {
 	gws      map[int64]*gwQueue
 	total    atomic.Int64
 	redisErr bool
-	persists int
 }
 
 type gwQueue struct {
 	items    []*qItem
 	unsaved  []*qItem // pushed since the last persist
-	toDelete []string // stream IDs of popped items
+	toDelete []string // fields of popped items that may be in Redis
 	restored atomic.Bool
 }
 
 type qItem struct {
-	job      *dlrJob
-	streamID string
-	popped   bool
+	job    *dlrJob
+	stored bool // an HSET was sent, so it may be in Redis
+	popped bool
 }
 
 func newDLRQueue(rdb *redis.Client, log *slog.Logger) *dlrQueue {
@@ -80,8 +93,8 @@ func (q *dlrQueue) pushLocked(g *gwQueue, it *qItem, persist bool) {
 
 func (q *dlrQueue) markPopped(g *gwQueue, it *qItem) {
 	it.popped = true
-	if it.streamID != "" {
-		g.toDelete = append(g.toDelete, it.streamID)
+	if it.stored {
+		g.toDelete = append(g.toDelete, queueField(it.job))
 	}
 }
 
@@ -107,9 +120,9 @@ func (q *dlrQueue) pop(id int64, n int) []*dlrJob {
 	return out
 }
 
-// forget drops a removed gateway's in-memory queue. Its Redis stream is left
+// forget drops a removed gateway's in-memory queue. Its Redis hash is left
 // alone: if the gateway moved to another worker, that worker restores it; if
-// it was deleted, the control plane deletes the stream.
+// it was deleted, the control plane deletes the hash.
 func (q *dlrQueue) forget(id int64) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -131,94 +144,105 @@ func (q *dlrQueue) gatewaysWithItems() []int64 {
 	return ids
 }
 
-// persist mirrors pushes and pops since the last call to Redis.
+// persistOp is one HDEL (del) or HSET (items, with jobs copied under the lock
+// so encoding them races with nothing).
+type persistOp struct {
+	gw    int64
+	del   []string
+	items []*qItem
+	jobs  []dlrJob
+}
+
+// persist mirrors pushes and pops since the last call to Redis, in round
+// trips of persistPipeline commands. Within a gateway, deletes go before adds,
+// so a job popped and queued again in the same second ends up stored. On the
+// first failed round trip, it and everything after it is put back for the
+// next call.
 func (q *dlrQueue) persist(ctx context.Context) {
 	if q.rdb == nil {
 		return
 	}
-	type batch struct {
-		add []*qItem
-		del []string
-	}
 	q.mu.Lock()
-	work := map[int64]*batch{}
+	var ops []persistOp
 	for id, g := range q.gws {
-		var add []*qItem
+		for b := range slices.Chunk(g.toDelete, persistBatch) {
+			ops = append(ops, persistOp{gw: id, del: b})
+		}
+		op := persistOp{gw: id}
 		for _, it := range g.unsaved {
-			if !it.popped {
-				add = append(add, it)
+			if it.popped {
+				continue
+			}
+			it.stored = true
+			op.items = append(op.items, it)
+			op.jobs = append(op.jobs, *it.job)
+			if len(op.items) == persistBatch {
+				ops = append(ops, op)
+				op = persistOp{gw: id}
 			}
 		}
-		if len(add) > 0 || len(g.toDelete) > 0 {
-			work[id] = &batch{add: add, del: g.toDelete}
+		if len(op.items) > 0 {
+			ops = append(ops, op)
 		}
 		g.unsaved, g.toDelete = nil, nil
 	}
-	q.persists++
-	trim := q.persists%60 == 0
 	q.mu.Unlock()
 
-	if len(work) == 0 && !trim {
-		return
-	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	pipe := q.rdb.Pipeline()
-	adds := map[*qItem]*redis.StringCmd{}
-	for id, b := range work {
-		key := streamKey(id)
-		for _, it := range b.add {
-			data, _ := json.Marshal(it.job)
-			adds[it] = pipe.XAdd(ctx, &redis.XAddArgs{Stream: key, Values: []any{"j", data}})
-		}
-		for i := 0; i < len(b.del); i += 1000 {
-			pipe.XDel(ctx, key, b.del[i:min(i+1000, len(b.del))]...)
+	var err error
+	for i := 0; i < len(ops); i += persistPipeline {
+		if err = q.write(ctx, ops[i:min(i+persistPipeline, len(ops))]); err != nil {
+			q.putBack(ops[i:])
+			break
 		}
 	}
-	if trim {
-		minID := strconv.FormatInt(time.Now().Add(-72*time.Hour).UnixMilli(), 10)
-		q.mu.Lock()
-		for id := range q.gws {
-			pipe.XTrimMinID(ctx, streamKey(id), minID)
-		}
-		q.mu.Unlock()
-	}
-	_, err := pipe.Exec(ctx)
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if err != nil {
-		// Put the work back; it is retried next second.
-		for id, b := range work {
-			g := q.gw(id)
-			for _, it := range b.add {
-				if adds[it].Err() != nil {
-					g.unsaved = append(g.unsaved, it)
-				}
-			}
-			g.toDelete = append(g.toDelete, b.del...)
-		}
-		if !q.redisErr {
-			q.log.Warn("dlr queue persist failed; keeping queued DLRs in memory", "err", err)
-			q.redisErr = true
-		}
-	} else if q.redisErr {
+	if err != nil && !q.redisErr {
+		q.log.Warn("dlr queue persist failed; keeping queued DLRs in memory", "err", err)
+		q.redisErr = true
+	} else if err == nil && q.redisErr {
 		q.log.Info("dlr queue persist restored")
 		q.redisErr = false
 	}
-	for it, cmd := range adds {
-		if cmd.Err() != nil {
+}
+
+func (q *dlrQueue) write(ctx context.Context, ops []persistOp) error {
+	ctx, cancel := context.WithTimeout(ctx, persistTimeout)
+	defer cancel()
+	pipe := q.rdb.Pipeline()
+	for _, op := range ops {
+		key := queueKey(op.gw)
+		if op.del != nil {
+			pipe.HDel(ctx, key, op.del...)
 			continue
 		}
-		it.streamID = cmd.Val()
-		if it.popped {
-			q.gw(it.job.GatewayID).toDelete = append(q.gw(it.job.GatewayID).toDelete, it.streamID)
+		vals := make([]any, 0, 2*len(op.jobs))
+		for i := range op.jobs {
+			data, _ := json.Marshal(&op.jobs[i])
+			vals = append(vals, queueField(&op.jobs[i]), data)
 		}
+		pipe.HSet(ctx, key, vals...)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// putBack re-files ops that may not have reached Redis. Items popped since
+// were added to toDelete by markPopped (they are marked stored), so they are
+// skipped by the next persist and deleted instead.
+func (q *dlrQueue) putBack(ops []persistOp) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, op := range ops {
+		g := q.gw(op.gw)
+		g.toDelete = append(g.toDelete, op.del...)
+		g.unsaved = append(g.unsaved, op.items...)
 	}
 }
 
-// restore loads a gateway's persisted queue from Redis, once per gateway.
+// restore loads a gateway's persisted queue from Redis, once per gateway,
+// oldest first.
 func (q *dlrQueue) restore(id int64) {
 	if q.rdb == nil {
 		return
@@ -232,32 +256,42 @@ func (q *dlrQueue) restore(id int64) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	key, start, n := streamKey(id), "-", 0
-	for {
-		msgs, err := q.rdb.XRangeN(ctx, key, start, "+", 10_000).Result()
-		if err != nil {
-			q.log.Warn("dlr queue restore failed", "gateway_id", id, "err", err)
-			g.restored.Store(false)
-			return
-		}
-		if len(msgs) == 0 {
+	seen := map[string]bool{} // HSCAN may return a field twice
+	var items []*qItem
+	var bad []string
+	it := q.rdb.HScan(ctx, queueKey(id), 0, "", 10_000).Iterator()
+	for it.Next(ctx) {
+		field := it.Val()
+		if !it.Next(ctx) {
 			break
 		}
-		q.mu.Lock()
-		for _, msg := range msgs {
-			raw, _ := msg.Values["j"].(string)
-			var j dlrJob
-			if json.Unmarshal([]byte(raw), &j) != nil {
-				g.toDelete = append(g.toDelete, msg.ID)
-				continue
-			}
-			q.pushLocked(g, &qItem{job: &j, streamID: msg.ID}, false)
-			n++
+		if seen[field] {
+			continue
 		}
-		q.mu.Unlock()
-		start = "(" + msgs[len(msgs)-1].ID
+		seen[field] = true
+		var j dlrJob
+		if json.Unmarshal([]byte(it.Val()), &j) != nil {
+			bad = append(bad, field)
+			continue
+		}
+		items = append(items, &qItem{job: &j, stored: true})
 	}
-	if n > 0 {
-		q.log.Info("dlr queue restored", "gateway_id", id, "dlrs", n)
+	if err := it.Err(); err != nil {
+		q.log.Warn("dlr queue restore failed", "gateway_id", id, "err", err)
+		g.restored.Store(false)
+		return
+	}
+	slices.SortFunc(items, func(a, b *qItem) int {
+		return cmp.Or(a.job.QueuedAt.Compare(b.job.QueuedAt), cmp.Compare(a.job.MsgID, b.job.MsgID))
+	})
+
+	q.mu.Lock()
+	for _, it := range items {
+		q.pushLocked(g, it, false)
+	}
+	g.toDelete = append(g.toDelete, bad...)
+	q.mu.Unlock()
+	if len(items) > 0 {
+		q.log.Info("dlr queue restored", "gateway_id", id, "dlrs", len(items))
 	}
 }
