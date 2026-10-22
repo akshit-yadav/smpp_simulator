@@ -18,7 +18,7 @@ behaviour, MO traffic and TPS limit.
 | M6 Intermediate DLRs (ENROUTE/ACCEPTD before the final DLR: off, when requested, always) | ✅ Done |
 | M7 MO generator: rate or burst, schedule, sources/destinations, weighted templates, GSM7/UCS2, long messages, queue or drop, Send test MO, MO report | ✅ Done |
 | M8 Licensing: signed licences (Ed25519), machine fingerprints, gateway limit with suspension, global TPS cap shared by workers, expiry and clock checks, Licence screen, `licgen` | ✅ Done |
-| M9 Hardening and acceptance | ⏳ Next |
+| M9 Hardening and acceptance: resilience test, `host-tune.sh`, [acceptance checklist](docs/acceptance.md), install/upgrade/runbook | ✅ Done (the 60-minute benchmark gate needs a dedicated host) |
 | Next phase (deferred from M6): `submit_multi`, `data_sm`, `query_sm`, `cancel_sm`, `replace_sm`; conditional rules; live overrides; response latency | 🕓 Deferred |
 
 See [docs/build-prompt.md](docs/build-prompt.md) for the full scope.
@@ -323,6 +323,61 @@ make up            # = docker compose up -d --build
 
 The bundled stores publish only on `127.0.0.1` and on non-default ports (13306, 16379,
 18123/19000), so they never clash with stores already on the host.
+
+## Install on a server
+
+1. **Host:** Linux with Docker and Compose v2, 8 vCPU / 16 GB for 25k TPS. Give PSG its own
+   host for load tests: the 2026-10-21 lab outage happened because PSG and the platform
+   under test shared 14 GB and ran out of memory (see the runbook).
+2. `sudo deploy/host-tune.sh` to see recommended kernel settings, then `--apply`.
+3. `git clone`, then `make env` (writes `.env` with random secrets).
+4. Put the licence in `config/licence.psglic` (installed on first start), or upload it in
+   the panel. Without one, the free tier applies (10 gateways, 1,000 TPS).
+5. `make up-bundled`, or `make up` with your own stores (next section). The control plane
+   applies the MariaDB migrations and the ClickHouse schema itself.
+6. Open the panel, sign in as `admin` with `PSG_ADMIN_PASSWORD`, change the password and
+   turn on TOTP (Settings).
+
+## Upgrade
+
+```sh
+git pull
+diff <(grep -oE '^[A-Z_]+=' .env.example | sort) <(grep -oE '^[A-Z_]+=' .env | sort)  # new settings?
+docker compose --profile bundled up -d --build   # or: make up (own stores)
+```
+
+The control plane migrates MariaDB (Alembic) and ClickHouse (`control/clickhouse/*.sql`,
+tracked in `psg_schema`) on start. Restarting the worker drops SMPP sessions; clients
+rebind. Queued DLRs and MOs are in Redis, and MO runs resume. To roll back, check out the
+previous release and rebuild. Migrations are additive, so the older code runs on the newer
+schema.
+
+## Runbook
+
+| Symptom | What to check | What to do |
+|---|---|---|
+| Host stops answering under load | `free -m` (swap full?), `docker stats`, `/var/log/syslog` for "Under memory pressure" | Memory exhausted. Move PSG or the platform to another host; `deploy/host-tune.sh` (swappiness 10); give containers memory limits; set `PSG_EVENTS_ENABLED=false` to skip event writing |
+| Panel shows a worker offline | `docker compose ps`, `docker compose logs worker`, Redis reachable? | Live stats and heartbeats go through Redis; SMPP traffic continues without it |
+| ClickHouse down | `psg_events_clickhouse_up` 0, `psg_events_spill_bytes` growing | Nothing to do: events spill to the `worker-spill` volume and replay in order. When the spill reaches `PSG_SPILL_MAX_BYTES`, rows are dropped and counted (`psg_events_total{result="dropped"}`) |
+| MariaDB down | API returns 503 "database unavailable" | Traffic continues with the workers' cached config; changes wait for MariaDB |
+| Gateway in **Error** | Gateway page → error text (usually "address already in use") | Something else holds the port: stop it, or move the gateway to another port |
+| Client gets no DLRs | `psg_dlr_queued` > 0? Client bound as TX only? `registered_delivery`? DLRs on for the gateway? | DLRs queue until an RX/TRX session binds (72 h) |
+| `ESME_RTHROTTLED` without a TPS limit | Reports → Throttling: licence-throttled? Licence page | Licence TPS cap or free tier: install a licence, or a bigger one |
+| Licence banner "Wrong machine" or partial match | Licence page → worker machines | The NIC or machine ID changed: **Request licence** and send the file to HWPL |
+| Licence "clock went back" | `date` on the host vs real time | Fix NTP; it clears once the clock passes the last time seen |
+
+**Metrics** (worker `:9108/metrics`): `psg_submit_total`, `psg_dlr_total`, `psg_mo_total`
+(by gateway and result), `psg_sessions`, `psg_dlr_pending`, `psg_dlr_queued`,
+`psg_events_total`, `psg_events_spill_bytes`, `psg_events_clickhouse_up`,
+`psg_worker_redis_up`.
+
+**Logs** are JSON on stdout: `docker compose logs -f worker | grep -v '"bound"'`.
+
+**Back up:** MariaDB (all configuration and the licence), Redis with AOF (queued DLRs and
+MOs), and, at HWPL only, the `licgen` private key.
+
+**Resilience test:** `deploy/resilience-test.sh` starts an isolated stack and stops each
+store under load (see [docs/acceptance.md](docs/acceptance.md)).
 
 ## Configuration
 
