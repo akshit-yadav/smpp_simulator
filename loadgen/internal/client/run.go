@@ -17,6 +17,7 @@ import (
 
 	"github.com/HdrHistogram/hdrhistogram-go"
 
+	"github.com/akshit-yadav/smpp_simulator/worker/pkg/simulator"
 	"github.com/akshit-yadav/smpp_simulator/worker/pkg/smpp/pdu"
 )
 
@@ -40,8 +41,12 @@ type run struct {
 	dlrStat  map[string]int64
 	awaiting map[string]time.Time // message_id -> submit_sm_resp time
 	early    map[string]earlyDLR  // DLRs that overtook their submit_sm_resp (another session)
-	errLog   []ErrorRecord
-	errTaken int
+	// firstOwn is when PSG issued this run's first message ID (PSG's clock);
+	// a DLR for an unknown, older ID is from an earlier run.
+	firstOwn   time.Time
+	earlierRun int64 // DLRs (final or intermediate) for an earlier run's messages
+	errLog     []ErrorRecord
+	errTaken   int
 
 	traceF    *os.File
 	traceCh   chan traceRec // to the trace writer
@@ -299,36 +304,78 @@ type earlyDLR struct {
 func (r *run) trackDLR(id string, at time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if t, ok := simulator.MessageTime(id); ok && (r.firstOwn.IsZero() || t.Before(r.firstOwn)) {
+		r.firstOwn = t
+	}
 	if e, ok := r.early[id]; ok { // its DLR came first, on another session
 		delete(r.early, id)
+		r.countDLR(e.session, e.stat)
 		_ = r.dlrDelay.RecordValue(max(e.at.Sub(at).Milliseconds(), 1))
 		return
 	}
 	r.awaiting[id] = at
 }
 
-// recordDLR matches a DLR with its message. Intermediate ones (ENROUTE,
-// ACCEPTD) are counted apart and keep the message waiting for its final DLR.
-func (r *run) recordDLR(s *session, id, stat string, at time.Time) {
-	if stat == "ENROUTE" || stat == "ACCEPTD" {
-		r.intermediate.Add(1)
-		r.mu.Lock()
-		r.dlrStat[stat]++
-		r.mu.Unlock()
-		return
-	}
+// earlierRunSlack allows for clock differences between workers; an earlier
+// run's messages are at least its drain time older than this run's.
+const earlierRunSlack = time.Second
+
+// earlier reports whether id is a message an earlier run sent: PSG delivers
+// a DLR to any bind of the gateway, so a re-test can receive the last run's.
+// Needs r.mu.
+func (r *run) earlier(id string) bool {
+	t, ok := simulator.MessageTime(id)
+	return ok && !r.firstOwn.IsZero() && t.Before(r.firstOwn.Add(-earlierRunSlack))
+}
+
+// countDLR counts a final DLR of this run. Needs r.mu.
+func (r *run) countDLR(s *session, stat string) {
 	r.dlrs.Add(1)
 	r.targets[s.target].dlrs.Add(1)
+	r.dlrStat[stat]++
+}
+
+// recordDLR matches a DLR with its message. Intermediate ones (ENROUTE,
+// ACCEPTD) are counted apart and keep the message waiting for its final DLR.
+// DLRs for an earlier run's messages are counted apart and nowhere else.
+func (r *run) recordDLR(s *session, id, stat string, at time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.dlrStat[stat]++
+	if r.earlier(id) {
+		r.earlierRun++
+		return
+	}
+	if stat == "ENROUTE" || stat == "ACCEPTD" {
+		r.intermediate.Add(1)
+		r.dlrStat[stat]++
+		return
+	}
 	if sentAt, ok := r.awaiting[id]; ok {
 		delete(r.awaiting, id)
+		r.countDLR(s, stat)
 		_ = r.dlrDelay.RecordValue(max(at.Sub(sentAt).Milliseconds(), 1))
 	} else if r.spec.wantsDLR() {
-		// Its submit_sm_resp may still be on its way on another session;
-		// still unmatched at the end of the run, it counts as unmatched.
+		// Its submit_sm_resp may still be on its way on another session, or
+		// it is an earlier run's DLR that came before this run had a message
+		// to compare with: counted once that is known (trackDLR, or the end
+		// of the run).
 		r.early[id] = earlyDLR{at: at, session: s, stat: stat}
+	} else {
+		r.countDLR(s, stat)
+	}
+}
+
+// settleEarly sorts the DLRs still waiting for their message at the end of
+// the run: an earlier run's, or this run's but unmatched (counted as
+// received, and reported). Needs r.mu.
+func (r *run) settleEarly() {
+	for id, e := range r.early {
+		if r.earlier(id) {
+			r.earlierRun++
+			delete(r.early, id)
+		} else {
+			r.countDLR(e.session, e.stat)
+		}
 	}
 }
 
@@ -384,6 +431,9 @@ func latency(h *hdrhistogram.Histogram) Latency {
 
 func (r *run) result(sessions []*session, stopped string) *Result {
 	finished := time.Now()
+	r.mu.Lock()
+	r.settleEarly() // before the DLR counts are read
+	r.mu.Unlock()
 	res := &Result{
 		Started: r.start.UTC(), Finished: finished.UTC(), Stopped: stopped,
 		OfferedTPS: r.spec.TPS, Sessions: len(sessions),
@@ -407,6 +457,7 @@ func (r *run) result(sessions []*session, stopped string) *Result {
 
 	r.mu.Lock()
 	res.Statuses, res.DLRStatus = r.statuses, r.dlrStat
+	res.DLRsEarlierRun = r.earlierRun
 	res.Latency = latency(r.resp)
 	res.DLRDelayP50, res.DLRDelayP99 = r.dlrDelay.ValueAtQuantile(50), r.dlrDelay.ValueAtQuantile(99)
 	if r.spec.wantsDLR() {

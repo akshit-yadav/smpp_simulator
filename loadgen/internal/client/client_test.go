@@ -24,6 +24,7 @@ type fakeSMSC struct {
 	dlrAfter time.Duration
 	reject   func(n int64) pdu.Status // status for the n-th submit_sm (1-based)
 	silent   func(n int64) bool       // never answer the n-th submit_sm
+	leftover []string                 // message IDs whose DLRs each receiver gets on binding
 
 	submits   atomic.Int64
 	marked    atomic.Int64 // binds carrying the simulator marker
@@ -95,6 +96,11 @@ func (f *fakeSMSC) serve(nc net.Conn) {
 				f.mu.Unlock()
 			}
 			c.write(pdu.Encode(p.CommandID.Resp(), 0, p.Sequence, pdu.BindResp{SystemID: "FAKE"}.Append(nil)))
+			if p.CommandID != pdu.BindTransmitter {
+				for _, id := range f.leftover { // like PSG flushing a queue on bind
+					c.deliverDLR(id)
+				}
+			}
 		case pdu.SubmitSM:
 			if p.Sequence < lastSeq {
 				f.disorder.Add(1)
@@ -110,7 +116,7 @@ func (f *fakeSMSC) serve(nc net.Conn) {
 					continue
 				}
 			}
-			id := strconv.FormatInt(n, 16)
+			id := psgID(time.Now(), n)
 			c.write(pdu.Encode(pdu.SubmitSMResp, 0, p.Sequence, pdu.MessageIDResp{MessageID: id}.Append(nil)))
 			sm, _ := pdu.DecodeSM(p.Body)
 			if sm.RegisteredDelivery&1 == 1 {
@@ -132,6 +138,13 @@ func (f *fakeSMSC) serve(nc net.Conn) {
 	}
 }
 
+// psgID builds a message ID the way PSG does (worker/internal/msgid):
+// worker 1 | ms since 2025-01-01 (40 bits) | sequence (16 bits).
+func psgID(at time.Time, n int64) string {
+	ms := uint64(at.Sub(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)).Milliseconds())
+	return strconv.FormatUint(1<<56|ms<<16|uint64(n)&0xffff, 16)
+}
+
 func (f *fakeSMSC) sendDLR(id string) {
 	f.mu.Lock()
 	if len(f.receivers) == 0 {
@@ -141,6 +154,10 @@ func (f *fakeSMSC) sendDLR(id string) {
 	c := f.receivers[f.rr%len(f.receivers)]
 	f.rr++
 	f.mu.Unlock()
+	c.deliverDLR(id)
+}
+
+func (c *fakeConn) deliverDLR(id string) {
 	sm := pdu.SM{ESMClass: 0x04, ShortMessage: []byte("id:" + id + " sub:001 dlvrd:001 stat:DELIVRD err:000")}
 	c.smu.Lock()
 	c.seq++
@@ -296,5 +313,34 @@ func BenchmarkTraceRead(b *testing.B) {
 	line = strings.TrimSuffix(line, "\n")
 	for b.Loop() {
 		parseTraceLine(line)
+	}
+}
+
+func TestDLRsFromAnEarlierRun(t *testing.T) {
+	f := newSMSC(t)
+	old := psgID(time.Now().Add(-time.Hour), 1)
+	f.leftover = []string{
+		old,                                      // an earlier run's: set apart
+		psgID(time.Now().Add(30*time.Second), 2), // unknown but not older: unmatched
+		"abc",                                    // not a PSG message ID: unmatched
+	}
+	s := spec(f, 1)
+	s.Duration = time.Second
+	var errs []ErrorRecord
+	var mu sync.Mutex
+	res, err := Run(context.Background(), s, Hooks{Errors: func(e []ErrorRecord) { mu.Lock(); errs = append(errs, e...); mu.Unlock() }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.DLRsEarlierRun != 1 || res.DLRUnmatched != 2 {
+		t.Errorf("earlier run %d, unmatched %d; want 1 and 2", res.DLRsEarlierRun, res.DLRUnmatched)
+	}
+	if res.OK == 0 || res.DLRs != res.OK+2 || res.DLRStatus["DELIVRD"] != res.OK+2 {
+		t.Errorf("ok %d, dlrs %d, statuses %v: the earlier run's DLR is in no count", res.OK, res.DLRs, res.DLRStatus)
+	}
+	for _, e := range errs {
+		if strings.Contains(e.Detail, old) {
+			t.Errorf("the earlier run's DLR was reported: %+v", e)
+		}
 	}
 }

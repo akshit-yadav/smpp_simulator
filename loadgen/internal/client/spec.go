@@ -169,17 +169,20 @@ type Result struct {
 	DLRs         int64            `json:"dlrs"` // final DLRs received
 	DLRsMissing  int              `json:"dlrs_missing"`
 	DLRUnmatched int64            `json:"dlrs_unmatched"`
-	Intermediate int64            `json:"intermediate_dlrs"`
-	DLRStatus    map[string]int64 `json:"dlr_status"`
-	DLRDelayP50  int64            `json:"dlr_delay_p50_ms"`
-	DLRDelayP99  int64            `json:"dlr_delay_p99_ms"`
-	MO           int64            `json:"mo"`
-	Errors       int64            `json:"errors"`        // all errors seen
-	ErrorsLogged int              `json:"errors_logged"` // kept in the error log (capped)
-	Targets      []TargetResult   `json:"targets"`
-	PerSession   []SessionResult  `json:"per_session,omitempty"`
-	TraceFull    bool             `json:"trace_full,omitempty"` // the trace misses PDUs (size cap, or the disk fell behind): per-session figures are partial
-	Timeline     []Second         `json:"timeline"`
+	// DLRsEarlierRun counts DLRs for messages an earlier run sent (PSG delivers
+	// a DLR to any bind of the gateway); they are in no other count.
+	DLRsEarlierRun int64            `json:"dlrs_earlier_run,omitempty"`
+	Intermediate   int64            `json:"intermediate_dlrs"`
+	DLRStatus      map[string]int64 `json:"dlr_status"`
+	DLRDelayP50    int64            `json:"dlr_delay_p50_ms"`
+	DLRDelayP99    int64            `json:"dlr_delay_p99_ms"`
+	MO             int64            `json:"mo"`
+	Errors         int64            `json:"errors"`        // all errors seen
+	ErrorsLogged   int              `json:"errors_logged"` // kept in the error log (capped)
+	Targets        []TargetResult   `json:"targets"`
+	PerSession     []SessionResult  `json:"per_session,omitempty"`
+	TraceFull      bool             `json:"trace_full,omitempty"` // the trace misses PDUs (size cap, or the disk fell behind): per-session figures are partial
+	Timeline       []Second         `json:"timeline"`
 }
 
 // ErrorRecord is one entry of the error log.

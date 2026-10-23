@@ -91,6 +91,8 @@ export const GLOSSARY = {
   netDelay: "Added to every PDU in each direction, like a slow or distant network link: response times grow by two delays. Fixed, or random between a minimum and a maximum. PDUs keep their order (as on a real TCP link), so with a random delay and steady traffic most PDUs wait close to the maximum.",
   respDelay: "How long the simulator takes to answer each deliver_sm (DLRs and MOs), like a slow platform. It exercises PSG's DLR window, timeouts and retries.",
   keepErrors: "Keep the error log (rejected and throttled submit_sm, timeouts, disconnects, unmatched or missing DLRs; up to 10,000 entries) for 24 hours after the run. Off: it is deleted when the result arrives.",
+  dlrEarlierRun:
+    "DLRs for messages an earlier test run sent: PSG delivers a DLR to any bind of the gateway, so a re-test can receive the last run's. The tester recognises them by the submit time in the message ID and leaves them out of received, unmatched and errors.",
   pduTrace: "The tester logs every PDU to a temporary file during the run, reads it back for per-session results and deletes it as soon as the result is ready. No PDU log leaves the tester. Logging never slows the sessions: if the disk falls behind, PDUs are left out and the per-session figures are marked partial.",
   bindRtt: "Time for the bind to be answered, before any added delay: the real network round trip between the tester and PSG.",
   includeSimulator: "Traffic from PSG's own client simulator is left out of reports unless this is ticked.",

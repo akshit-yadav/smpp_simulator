@@ -537,6 +537,7 @@ export interface TestResult {
   dlrs: number;
   dlrs_missing: number;
   dlrs_unmatched: number;
+  dlrs_earlier_run?: number; // DLRs for an earlier run's messages, in no other count
   intermediate_dlrs: number;
   dlr_status: Record<string, number>;
   dlr_delay_p50_ms: number;

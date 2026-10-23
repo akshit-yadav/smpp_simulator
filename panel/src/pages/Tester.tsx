@@ -494,6 +494,12 @@ function ResultDetails({ res }: { res: TestResult }) {
           <dt>Final DLRs</dt>
           <dd>
             {fmtNum(res.dlrs)} received · {fmtNum(res.dlrs_missing)} missing · {fmtNum(res.dlrs_unmatched)} unmatched
+            {(res.dlrs_earlier_run ?? 0) > 0 && (
+              <>
+                {" · "}
+                <Term info="dlrEarlierRun">{fmtNum(res.dlrs_earlier_run)} from an earlier run (ignored)</Term>
+              </>
+            )}
           </dd>
           <dt>Intermediate DLRs</dt>
           <dd>{fmtNum(res.intermediate_dlrs)}</dd>
