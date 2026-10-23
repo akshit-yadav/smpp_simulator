@@ -299,13 +299,21 @@ export const useTesters = () => useQuery({ queryKey: ["testers"], queryFn: () =>
 
 export const useTests = () => useQuery({ queryKey: ["tests"], queryFn: () => get<TestRunOut[]>("/tests"), refetchInterval: 5000 });
 
-export const useTest = (id: number | null) =>
-  useQuery({
+export const useTest = (id: number | null) => {
+  const qc = useQueryClient();
+  return useQuery({
     queryKey: ["tests", id],
-    queryFn: () => get<TestRunOut>(`/tests/${id}`),
+    // While a test runs, ask only for the timeline points this page does not have yet.
+    queryFn: async () => {
+      const prev = qc.getQueryData<TestRunOut>(["tests", id]);
+      const lastT = prev?.status === "running" ? prev.timeline?.at(-1)?.t : undefined;
+      const r = await get<TestRunOut>(`/tests/${id}${lastT !== undefined ? `?since=${lastT}` : ""}`);
+      return r.timeline_since !== undefined && prev?.timeline ? { ...r, timeline: [...prev.timeline, ...(r.timeline ?? [])].slice(-7200) } : r;
+    },
     enabled: id !== null,
     refetchInterval: (q) => (q.state.data && ["queued", "running"].includes(q.state.data.status) ? 1000 : false),
   });
+};
 
 export const useTestErrors = (id: number, enabled: boolean) =>
   useQuery({

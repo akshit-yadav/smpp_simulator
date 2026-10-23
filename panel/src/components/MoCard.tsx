@@ -140,6 +140,11 @@ function MoSummary({ d }: { d: MOOut }) {
               </tr>
             </tbody>
           </table>
+          {(s.licence_skipped ?? 0) > 0 && (
+            <div className="alert warning note">
+              {fmtNum(s.licence_skipped)} MO parts were not sent: traffic was over the licence TPS cap, which MOs share with submit_sm.
+            </div>
+          )}
           <p className="muted small" style={{ marginBottom: 0 }}>
             Since the worker started, all runs and test MOs.
           </p>

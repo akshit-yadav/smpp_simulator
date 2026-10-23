@@ -110,21 +110,31 @@ def port_check(
     return command(stores, worker_id, {"type": "port_check", "port": port}, timeout)
 
 
-def live_json(stores: Stores, key: str):
-    try:
-        raw = stores.redis.get(key)
-    except RedisError:
-        return None
-    return json.loads(raw) if raw else None
+def live_json(stores: Stores, key: str, shared: bool = False):
+    """A worker's live JSON. shared: may be up to live_cache_s old and is shared
+    with other callers (panel polls), so it must not be changed."""
+
+    def read():
+        try:
+            raw = stores.redis.get(key)
+        except RedisError:
+            return None
+        return json.loads(raw) if raw else None
+
+    return stores.live_cache.get(key, read) if shared else read()
 
 
-def runtime_status(stores: Stores, worker_id: int) -> dict[int, dict]:
-    """Per-gateway listener state as reported by the worker."""
-    try:
-        raw = stores.redis.hgetall(gwstatus_key(worker_id))
-    except RedisError:
-        return {}
-    return {int(k): json.loads(v) for k, v in raw.items()}
+def runtime_status(stores: Stores, worker_id: int, shared: bool = False) -> dict[int, dict]:
+    """Per-gateway listener state as reported by the worker; shared as in live_json."""
+
+    def read():
+        try:
+            raw = stores.redis.hgetall(gwstatus_key(worker_id))
+        except RedisError:
+            return {}
+        return {int(k): json.loads(v) for k, v in raw.items()}
+
+    return stores.live_cache.get(gwstatus_key(worker_id), read) if shared else read()
 
 
 def forget_gateway(stores: Stores, gateway_id: int) -> None:

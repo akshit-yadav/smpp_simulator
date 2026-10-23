@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from anyio import to_thread
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
@@ -59,6 +60,8 @@ def create_app(settings: Settings | None = None, run_scheduler: bool = True) -> 
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        # Sync handlers and dependencies run in this pool: room for many panel users.
+        to_thread.current_default_thread_limiter().total_tokens = settings.api_threads
         try:
             with Session(stores.db) as db:
                 bootstrap_admin(db, settings)

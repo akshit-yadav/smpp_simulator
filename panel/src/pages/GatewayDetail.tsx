@@ -366,7 +366,7 @@ export default function GatewayDetail() {
                       <td>{e.name || `Entry ${i + 1}`}</td>
                       <td>{e.command_status === 0 ? "Accept" : `Reject ${hex(e.command_status)}`}</td>
                       <td className="mono">{e.command_status === 0 ? `stat:${e.dlr_status} err:${e.dlr_error}` : "—"}</td>
-                      {rule.data.mode === "weighted" && <td className="num">{(e.weight_bp / 100).toFixed(2)}%</td>}
+                      {rule.data.mode === "weighted" && <td className="num">{e.weight_bp / 100}%</td>}
                     </tr>
                   ))}
                 </tbody>

@@ -78,24 +78,28 @@ func (q *dlrQueue) gw(id int64) *gwQueue {
 
 func (q *dlrQueue) TotalLen() int { return int(q.total.Load()) }
 
-func (q *dlrQueue) push(j *dlrJob) {
+// push queues j. On a full gateway queue the oldest job gives way; it is
+// returned so the caller can record it.
+func (q *dlrQueue) push(j *dlrJob) (evicted *dlrJob) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.pushLocked(q.gw(j.GatewayID), &qItem{job: j}, q.rdb != nil)
+	return q.pushLocked(q.gw(j.GatewayID), &qItem{job: j}, q.rdb != nil)
 }
 
-func (q *dlrQueue) pushLocked(g *gwQueue, it *qItem, persist bool) {
+func (q *dlrQueue) pushLocked(g *gwQueue, it *qItem, persist bool) (evicted *dlrJob) {
 	if len(g.items) >= maxQueuedPerGateway {
 		old := g.items[0]
 		g.items = g.items[1:]
 		q.markPopped(g, old)
 		q.total.Add(-1)
+		evicted = old.job
 	}
 	g.items = append(g.items, it)
 	if persist {
 		g.unsaved = append(g.unsaved, it)
 	}
 	q.total.Add(1)
+	return evicted
 }
 
 func (q *dlrQueue) markPopped(g *gwQueue, it *qItem) {

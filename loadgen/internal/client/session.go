@@ -272,8 +272,12 @@ func (s *session) onSubmitResp(p pdu.Packet, now time.Time) {
 	sentAt, ok := s.pending[p.Sequence]
 	delete(s.pending, p.Sequence)
 	s.pmu.Unlock()
-	if !ok {
-		return // answered after its timeout
+	if !ok { // answered after its timeout: counted as one, but its DLR is still this run's
+		if p.Status == pdu.ESME_ROK && s.run.spec.wantsDLR() {
+			r, _ := pdu.DecodeMessageIDResp(p.Body)
+			s.run.trackDLR(r.MessageID, now)
+		}
+		return
 	}
 	<-s.window
 	lat := now.Sub(sentAt)

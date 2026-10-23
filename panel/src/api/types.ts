@@ -358,6 +358,7 @@ export interface MOStatus {
   queued: number;
   expired: number;
   dropped: number;
+  licence_skipped?: number; // generator parts not sent: over the licence TPS cap
 }
 
 export interface MOOut extends MOSettings {
@@ -578,6 +579,7 @@ export interface TestRunOut {
   result?: TestResult | null;
   progress?: { progress: { phase: string; elapsed_ms: number; sent: number; ok: number; errors: number; dlrs: number }; mem_available_mb: number } | null;
   timeline?: TestSecond[];
+  timeline_since?: number; // the timeline holds only the points after this t
   warnings?: string[];
 }
 

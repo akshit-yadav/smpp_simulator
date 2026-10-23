@@ -83,6 +83,16 @@ def test_full_run_through_the_tester_api(admin, rdb, worker):
     assert live["status"] == "running" and live["progress"]["progress"]["sent"] == 100
     assert live["timeline"] == [{"t": 1, "sent": 100}]
 
+    # A panel that has the timeline up to t asks only for what came after it,
+    # also after a gap longer than the tail read first.
+    for t in range(2, 200):
+        body = {"progress": {"phase": "sending", "last": {"t": t, "sent": 100}}}
+        admin.post(f"/internal/v1/tests/{run['id']}/progress", json=body, headers=AGENT)
+    newer = admin.get(f"/api/v1/tests/{run['id']}", params={"since": 197}).json()
+    assert [p["t"] for p in newer["timeline"]] == [198, 199] and newer["timeline_since"] == 197
+    gap = admin.get(f"/api/v1/tests/{run['id']}", params={"since": 1}).json()["timeline"]
+    assert [p["t"] for p in gap] == list(range(2, 200))
+
     result = {"sent": 500, "ok": 498, "errors": 2, "achieved_tps": 100.0, "stopped": ""}
     assert (
         admin.post(
@@ -174,6 +184,12 @@ def test_silent_tester_fails_its_run(client, admin, rdb, worker):
         expire_stale(db, stores)
     r = admin.get(f"/api/v1/tests/{run['id']}").json()
     assert r["status"] == "failed" and "stopped reporting" in r["error"]
+
+    # A tester that was only slow (reading a large PDU trace back) still delivers its result.
+    url = f"/internal/v1/tests/{run['id']}/result"
+    assert admin.post(url, json={"result": {"sent": 5}}, headers=AGENT).status_code == 204
+    r = admin.get(f"/api/v1/tests/{run['id']}").json()
+    assert r["status"] == "done" and r["error"] is None and r["result"]["sent"] == 5
 
 
 def test_tokens_are_separate(client):

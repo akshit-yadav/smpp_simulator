@@ -2,13 +2,14 @@ import random
 from collections import Counter
 
 from fastapi import APIRouter, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from psg_control import audit
 from psg_control.api.deps import DB, Admin, StoresDep
 from psg_control.models import CommandStatus, Defaults, DLRError, DLRRule, DLRRuleEntry, Gateway
-from psg_control.schemas import PreviewIn, RuleIn, RuleOut
+from psg_control.schemas import EntryIn, PreviewIn, RuleIn, RuleOut
 from psg_control.sync import Changes
 
 router = APIRouter(prefix="/dlr-rules", tags=["DLR rules"])
@@ -35,12 +36,24 @@ def apply(db: Session, row: DLRRule, r: RuleIn) -> None:
     check_references(db, r)
     row.name, row.description = r.name, r.description
     row.mode, row.distribution, row.seed = r.mode, r.distribution, r.seed
+    if row.id is not None:
+        # A plain DELETE removes the latest committed entries, a concurrent
+        # save's included; the ORM would only delete the ones it loaded.
+        db.execute(delete(DLRRuleEntry).where(DLRRuleEntry.rule_id == row.id))
+        set_committed_value(row, "entries", [])
     row.entries = [DLRRuleEntry(position=i, **e.model_dump()) for i, e in enumerate(r.entries)]
 
 
 def as_input(row: DLRRule) -> RuleIn:
-    return RuleIn.model_validate(
-        RuleOut.model_validate(row).model_dump(include=set(RuleIn.model_fields))
+    """The stored rule as input, not validated again: a rule saved before a
+    newer check (whole-percent shares, say) still previews and diffs."""
+    out = RuleOut.model_validate(row)
+    entries = [
+        EntryIn.model_construct(**e.model_dump(include=set(EntryIn.model_fields)))
+        for e in out.entries
+    ]
+    return RuleIn.model_construct(
+        **out.model_dump(include=set(RuleIn.model_fields) - {"entries"}), entries=entries
     )
 
 
@@ -51,8 +64,9 @@ def name_taken(db: Session, name: str, exclude_id: int | None = None) -> bool:
     return db.scalar(q) is not None
 
 
-def get_rule(db: Session, rule_id: int) -> DLRRule:
-    row = db.get(DLRRule, rule_id)
+def get_rule(db: Session, rule_id: int, lock: bool = False) -> DLRRule:
+    """lock: hold the rule's row until commit, so saves of one rule run one at a time."""
+    row = db.get(DLRRule, rule_id, with_for_update=lock, populate_existing=lock)
     if row is None:
         raise HTTPException(status_code=404, detail="DLR rule not found.")
     return row
@@ -89,7 +103,7 @@ def read_rule(rule_id: int, db: DB, admin: Admin):
 def update_rule(
     rule_id: int, body: RuleIn, request: Request, db: DB, admin: Admin, stores: StoresDep
 ):
-    row = get_rule(db, rule_id)
+    row = get_rule(db, rule_id, lock=True)
     if name_taken(db, body.name, row.id):
         raise HTTPException(
             status_code=409, detail=f"A DLR rule named {body.name!r} already exists."

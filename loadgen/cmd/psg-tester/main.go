@@ -36,6 +36,9 @@ import (
 
 var version = "dev"
 
+// keepAlive is how often a run with no fresh progress re-reports its last.
+const keepAlive = 10 * time.Second
+
 type agent struct {
 	url, token string
 	id         int
@@ -149,22 +152,50 @@ func (a *agent) run(ctx context.Context, j job) {
 		spec.TraceDir = fmt.Sprintf("%s/run-%d", a.traceDir, j.RunID)
 	}
 	posting := atomic.Bool{}
+	var last atomic.Pointer[client.Progress]
+	var postedAt atomic.Int64 // unix ns
+	post := func(p client.Progress) {
+		if !posting.CompareAndSwap(false, true) {
+			return // the last update is still on its way: skip this one
+		}
+		postedAt.Store(time.Now().UnixNano())
+		go func() {
+			defer posting.Store(false)
+			var reply struct {
+				Stop bool `json:"stop"`
+			}
+			body := map[string]any{"progress": p, "mem_available_mb": memAvailableMB()}
+			if _, err := a.call(ctx, http.MethodPost, base+"/progress", body, &reply); err == nil && reply.Stop {
+				a.log.Info("run stopped from the panel", "run", j.RunID)
+				cancel()
+			}
+		}()
+	}
+	// Progress stops once sending ends, but unbinding, reading the PDU trace
+	// back and delivering the result take a while: keep the run alive, or the
+	// control plane fails it as stale (60 s) and drops the late result.
+	finished := make(chan struct{})
+	defer close(finished)
+	go func() {
+		t := time.NewTicker(keepAlive)
+		defer t.Stop()
+		for {
+			select {
+			case <-finished:
+				return
+			case <-t.C:
+			}
+			if p := last.Load(); p != nil && time.Since(time.Unix(0, postedAt.Load())) >= keepAlive {
+				q := *p
+				q.Last = client.Second{} // no new timeline point
+				post(q)
+			}
+		}
+	}()
 	hooks := client.Hooks{
 		Progress: func(p client.Progress) {
-			if !posting.CompareAndSwap(false, true) {
-				return // the last update is still on its way: skip this one
-			}
-			go func() {
-				defer posting.Store(false)
-				var reply struct {
-					Stop bool `json:"stop"`
-				}
-				body := map[string]any{"progress": p, "mem_available_mb": memAvailableMB()}
-				if _, err := a.call(ctx, http.MethodPost, base+"/progress", body, &reply); err == nil && reply.Stop {
-					a.log.Info("run stopped from the panel", "run", j.RunID)
-					cancel()
-				}
-			}()
+			last.Store(&p)
+			post(p)
 		},
 		Errors: func(batch []client.ErrorRecord) {
 			if _, err := a.call(ctx, http.MethodPost, base+"/errors", batch, nil); err != nil {

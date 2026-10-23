@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode } from "react";
 import { ApiError } from "../api/client";
 import { GLOSSARY, type GlossaryKey } from "../lib/glossary";
 
@@ -132,6 +132,43 @@ export function Check({
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       {children}
     </label>
+  );
+}
+
+/** The number in a whole-number field: null when empty, NaN when not a whole number. */
+export function parseWhole(text: string): number | null {
+  const t = text.trim();
+  if (t === "") return null;
+  return /^\d+$/.test(t) ? Number(t) : NaN;
+}
+
+/** A whole-number field. What is typed is never rounded or clamped behind the
+ *  user's back: an invalid entry reaches onChange as NaN for the form to flag.
+ *  Leading zeros are dropped when the field loses focus. */
+export function WholeInput({
+  value,
+  onChange,
+  className = "input",
+  ...rest
+}: { value: number | null; onChange: (v: number | null) => void } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "type">) {
+  const shown = (v: number | null) => (v === null || Number.isNaN(v) ? "" : String(v));
+  const [text, setText] = useState(shown(value));
+  // Follow changes made elsewhere; keep the typed text while it means the same.
+  useEffect(() => setText((t) => (Object.is(parseWhole(t), value) ? t : shown(value))), [value]);
+  const v = parseWhole(text);
+  return (
+    <input
+      {...rest}
+      className={Number.isNaN(v) ? `${className} invalid` : className}
+      inputMode="numeric"
+      value={text}
+      aria-invalid={Number.isNaN(v) || undefined}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(parseWhole(e.target.value));
+      }}
+      onBlur={() => !Number.isNaN(v) && setText(shown(v))}
+    />
   );
 }
 

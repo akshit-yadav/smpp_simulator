@@ -114,7 +114,7 @@ def commit_or_conflict(db: Session, worker: Worker, port: int, gateway_id: int |
 
 
 def runtime_for(stores: Stores, gw: Gateway) -> dict | None:
-    return sync.runtime_status(stores, gw.worker_id).get(gw.id)
+    return sync.runtime_status(stores, gw.worker_id, shared=True).get(gw.id)
 
 
 # ---- endpoints ---------------------------------------------------------------------------
@@ -139,7 +139,9 @@ def list_gateways(
         stmt = stmt.where(or_(Gateway.name.like(like), Gateway.system_id.like(like)))
     d = resolve.defaults(db)
     gws = list(db.scalars(stmt))
-    runtime = {wid: sync.runtime_status(stores, wid) for wid in {g.worker_id for g in gws}}
+    runtime = {
+        wid: sync.runtime_status(stores, wid, shared=True) for wid in {g.worker_id for g in gws}
+    }
     return [to_out(g, d, db, runtime[g.worker_id].get(g.id)) for g in gws]
 
 

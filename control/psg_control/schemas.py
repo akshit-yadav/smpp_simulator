@@ -15,6 +15,7 @@ DlrStatus = Literal[
 Ms = Annotated[int, Field(ge=0, le=86_400_000)]  # up to 24 h
 Intermediate = Literal["off", "requested", "always"]
 IntermediateStatus = Literal["ENROUTE", "ACCEPTD"]
+INTERMEDIATE_STATUSES = set(IntermediateStatus.__args__)
 
 if set(DlrStatus.__args__) != set(DLR_STATUSES):
     raise RuntimeError("DlrStatus is out of sync with catalog.DLR_STATUSES")
@@ -157,14 +158,29 @@ class RuleIn(Strict):
 
     @model_validator(mode="after")
     def check_mode(self):
+        for i, e in enumerate(self.entries, 1):
+            if e.dlr_status in INTERMEDIATE_STATUSES:
+                raise ValueError(
+                    f"entry {i}: {e.dlr_status} is an intermediate status, so the message would "
+                    "never get a final DLR; choose a final status (the gateway's Intermediate "
+                    f"DLR setting sends {e.dlr_status} before it)"
+                )
         if self.mode == "fixed":
             if len(self.entries) != 1:
                 raise ValueError("a fixed rule uses exactly one entry; remove the others")
             self.seed = None  # nothing random to seed
         if self.mode == "weighted":
+            for i, e in enumerate(self.entries, 1):
+                if e.weight_bp % 100:
+                    raise ValueError(
+                        f"entry {i}: share {e.weight_bp / 100:g}% must be a whole percentage"
+                    )
             total = sum(e.weight_bp for e in self.entries)
             if total != 10_000:
                 raise ValueError(f"weights total {total / 100:g}%; they must total 100% (10000 bp)")
+        else:  # only weighted mode has shares: none are kept to reappear later
+            for e in self.entries:
+                e.weight_bp = 0
         return self
 
 
@@ -425,6 +441,7 @@ class MOStatus(BaseModel):
     queued: int
     expired: int
     dropped: int
+    licence_skipped: int = 0  # generator parts not sent: over the licence TPS cap
 
 
 class MOOut(MOSettings):

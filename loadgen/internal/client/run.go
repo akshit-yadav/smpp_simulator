@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,11 +43,12 @@ type run struct {
 	errLog   []ErrorRecord
 	errTaken int
 
-	traceMu   sync.Mutex
-	traceW    *bufio.Writer
 	traceF    *os.File
-	traceSize int64
-	traceFull bool
+	traceCh   chan traceRec // to the trace writer
+	traceStop chan struct{} // closed: the writer flushes and ends
+	traceDone chan struct{} // closed by the writer when it has ended
+	stopOnce  sync.Once
+	traceLost atomic.Bool // a PDU is missing from the trace (cap reached, or the disk fell behind)
 }
 
 type targetStats struct {
@@ -459,48 +462,136 @@ func (r *run) result(sessions []*session, stopped string) *Result {
 
 // ---- temporary PDU trace -------------------------------------------------------
 
+// traceBacklog is how many PDUs may wait for the trace writer before new ones
+// are left out: sessions never wait on the disk.
+const traceBacklog = 1 << 16
+
+// traceRec is one PDU: kind S sent, R received, L submit_sm_resp latency.
+type traceRec struct {
+	ts       int64 // unix µs
+	session  int
+	kind     byte
+	cmd, seq uint32
+	status   uint32
+	lat      int64 // µs
+}
+
+// append writes the record as a trace line:
+// unix µs, session, kind, command (hex), sequence, status, latency µs.
+func (t traceRec) append(b []byte) []byte {
+	b = strconv.AppendInt(b, t.ts, 10)
+	b = append(b, ' ')
+	b = strconv.AppendInt(b, int64(t.session), 10)
+	b = append(b, ' ', t.kind, ' ')
+	b = strconv.AppendUint(b, uint64(t.cmd), 16)
+	b = append(b, ' ')
+	b = strconv.AppendUint(b, uint64(t.seq), 10)
+	b = append(b, ' ')
+	b = strconv.AppendUint(b, uint64(t.status), 10)
+	b = append(b, ' ')
+	b = strconv.AppendInt(b, t.lat, 10)
+	return append(b, '\n')
+}
+
+// parseTraceLine reads a line written by append.
+func parseTraceLine(line string) (t traceRec, ok bool) {
+	var f [7]string
+	for i := range len(f) - 1 {
+		var found bool
+		if f[i], line, found = strings.Cut(line, " "); !found {
+			return t, false
+		}
+	}
+	f[6] = line
+	var err [6]error
+	var n, cmd, seq, st uint64
+	t.ts, err[0] = strconv.ParseInt(f[0], 10, 64)
+	n, err[1] = strconv.ParseUint(f[1], 10, 31)
+	cmd, err[2] = strconv.ParseUint(f[3], 16, 32)
+	seq, err[3] = strconv.ParseUint(f[4], 10, 32)
+	st, err[4] = strconv.ParseUint(f[5], 10, 32)
+	t.lat, err[5] = strconv.ParseInt(f[6], 10, 64)
+	if len(f[2]) != 1 || errors.Join(err[:]...) != nil {
+		return t, false
+	}
+	t.session, t.kind, t.cmd, t.seq, t.status = int(n), f[2][0], uint32(cmd), uint32(seq), uint32(st)
+	return t, true
+}
+
 func (r *run) openTrace() error {
 	if err := os.MkdirAll(r.spec.TraceDir, 0o700); err != nil {
-		return err
+		return fmt.Errorf("PDU trace: %w", err)
 	}
 	f, err := os.CreateTemp(r.spec.TraceDir, "trace-*.log")
 	if err != nil {
-		return err
+		return fmt.Errorf("PDU trace: %w", err)
 	}
-	r.traceF, r.traceW = f, bufio.NewWriterSize(f, 1<<20)
+	r.traceF = f
+	r.traceCh = make(chan traceRec, traceBacklog)
+	r.traceStop, r.traceDone = make(chan struct{}), make(chan struct{})
+	go r.writeTrace()
 	return nil
 }
 
-// trace appends one line per PDU: unix µs, session, kind (S sent, R
-// received, L submit_sm_resp latency), command, sequence, status, latency µs.
+// trace hands one PDU to the trace writer, or leaves it out if the writer is
+// behind.
 func (r *run) trace(s *session, kind byte, cmd pdu.CommandID, seq uint32, st pdu.Status, lat time.Duration) {
-	if r.traceF == nil {
+	if r.traceCh == nil {
 		return
 	}
-	line := fmt.Sprintf("%d %d %c %08x %d %d %d\n", time.Now().UnixMicro(), s.idx, kind, uint32(cmd), seq, uint32(st), lat.Microseconds())
-	r.traceMu.Lock()
-	defer r.traceMu.Unlock()
-	if r.traceW == nil || r.traceFull {
-		return
+	select {
+	case r.traceCh <- traceRec{time.Now().UnixMicro(), s.idx, kind, uint32(cmd), seq, uint32(st), lat.Microseconds()}:
+	default:
+		r.traceLost.Store(true)
 	}
-	if r.traceSize+int64(len(line)) > r.spec.TraceMax {
-		r.traceFull = true
-		return
-	}
-	r.traceSize += int64(len(line))
-	_, _ = r.traceW.WriteString(line)
 }
 
-// evaluateTrace reads the trace back for per-session results.
-func (r *run) evaluateTrace(sessions []*session) ([]SessionResult, bool) {
-	r.traceMu.Lock()
-	_ = r.traceW.Flush()
-	full := r.traceFull
-	r.traceW = nil // no more lines
-	r.traceMu.Unlock()
+// writeTrace writes queued PDUs, up to TraceMax bytes, until traceStop.
+func (r *run) writeTrace() {
+	defer close(r.traceDone)
+	w := bufio.NewWriterSize(r.traceF, 1<<20)
+	var size int64
+	var line []byte
+	write := func(t traceRec) {
+		if line = t.append(line[:0]); size+int64(len(line)) > r.spec.TraceMax {
+			r.traceLost.Store(true)
+			return
+		}
+		size += int64(len(line))
+		_, _ = w.Write(line)
+	}
+	for {
+		select {
+		case t := <-r.traceCh:
+			write(t)
+		case <-r.traceStop:
+			for {
+				select {
+				case t := <-r.traceCh:
+					write(t)
+				default:
+					_ = w.Flush()
+					return
+				}
+			}
+		}
+	}
+}
+
+// stopTrace ends the writer once its queue is written; PDUs after it are left out.
+func (r *run) stopTrace() {
+	r.stopOnce.Do(func() { close(r.traceStop) })
+	<-r.traceDone
+}
+
+// evaluateTrace reads the trace back for per-session results. lost: the
+// trace misses some PDUs, so the figures are partial.
+func (r *run) evaluateTrace(sessions []*session) (res []SessionResult, lost bool) {
+	r.stopTrace()
+	lost = r.traceLost.Load()
 	f, err := os.Open(r.traceF.Name())
 	if err != nil {
-		return nil, full
+		return nil, lost
 	}
 	defer f.Close()
 	type acc struct {
@@ -513,27 +604,24 @@ func (r *run) evaluateTrace(sessions []*session) ([]SessionResult, bool) {
 	}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
-		var ts, lat int64
-		var idx int
-		var kind byte
-		var cmd, seq, st uint32
-		if n, _ := fmt.Sscanf(sc.Text(), "%d %d %c %x %d %d %d", &ts, &idx, &kind, &cmd, &seq, &st, &lat); n != 7 {
+		t, ok := parseTraceLine(sc.Text())
+		if !ok {
 			continue
 		}
-		a := per[idx]
+		a := per[t.session]
 		if a == nil {
 			continue
 		}
 		switch {
-		case kind == 'S':
+		case t.kind == 'S':
 			a.res.Sent++
-		case kind == 'L' && st == 0:
+		case t.kind == 'L' && t.status == 0:
 			a.res.OK++
-			_ = a.hist.RecordValue(max(lat, 1))
-		case kind == 'L':
+			_ = a.hist.RecordValue(max(t.lat, 1))
+		case t.kind == 'L':
 			a.res.NotOK++
-			_ = a.hist.RecordValue(max(lat, 1))
-		case kind == 'R' && pdu.CommandID(cmd) == pdu.DeliverSM:
+			_ = a.hist.RecordValue(max(t.lat, 1))
+		case t.kind == 'R' && pdu.CommandID(t.cmd) == pdu.DeliverSM:
 			a.res.Deliver++
 		}
 	}
@@ -543,14 +631,12 @@ func (r *run) evaluateTrace(sessions []*session) ([]SessionResult, bool) {
 		out = append(out, a.res)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Session < out[j].Session })
-	return out, full
+	return out, lost
 }
 
 // removeTrace deletes the trace: per-PDU data never outlives the run.
 func (r *run) removeTrace() {
-	r.traceMu.Lock()
-	r.traceW = nil
-	r.traceMu.Unlock()
+	r.stopTrace()
 	name := r.traceF.Name()
 	r.traceF.Close()
 	_ = os.Remove(name)

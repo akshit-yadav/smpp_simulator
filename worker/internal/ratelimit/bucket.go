@@ -49,7 +49,9 @@ func (b *Bucket) Rate() float64 {
 func (b *Bucket) Allow() bool { return b.AllowN(1) }
 
 // AllowN takes n tokens if all are available (e.g. every part of a long
-// message), or none.
+// message), or none. A message larger than the burst would never fit: it
+// passes once the bucket is full, and the tokens go negative until the refill
+// has paid them back.
 func (b *Bucket) AllowN(n int) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -57,7 +59,7 @@ func (b *Bucket) AllowN(n int) bool {
 		return true
 	}
 	b.refill()
-	if b.tokens < float64(n) {
+	if b.tokens < min(float64(n), b.burst) {
 		return false
 	}
 	b.tokens -= float64(n)

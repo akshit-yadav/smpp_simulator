@@ -139,6 +139,7 @@ class DLRRule(Base):
 
 class DLRRuleEntry(Base):
     __tablename__ = "dlr_rule_entry"
+    __table_args__ = (UniqueConstraint("rule_id", "position", name="uq_dlr_rule_entry_position"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     rule_id: Mapped[int] = mapped_column(ForeignKey("dlr_rule.id", ondelete="CASCADE"))

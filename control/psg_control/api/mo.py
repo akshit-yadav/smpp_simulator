@@ -27,7 +27,7 @@ SUGGESTED = MOSettings(
 
 
 def status(stores: Stores, gw: Gateway) -> MOStatus | None:
-    stats = sync.live_json(stores, f"psg:stats:{gw.worker_id}") or {}
+    stats = sync.live_json(stores, f"psg:stats:{gw.worker_id}", shared=True) or {}
     mo = (stats.get("gateways") or {}).get(str(gw.id), {}).get("mo")
     return MOStatus(**mo) if mo else None
 

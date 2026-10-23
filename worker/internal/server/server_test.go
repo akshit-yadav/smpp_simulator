@@ -939,3 +939,38 @@ func TestSimulatorTrafficIsTagged(t *testing.T) {
 		}
 	}
 }
+
+// MOs a receiver holds unanswered when the worker stops are queued, not lost.
+func TestShutdownKeepsUndeliveredMOs(t *testing.T) {
+	rdb := testRedis(t)
+	c := testConfig(t)
+	c.DLR.Enabled = false
+	c.MO = moConfig(5)
+	c.MO.Mode, c.MO.Burst = gateway.MOBurst, 50
+
+	m := NewManager(Options{ListenHost: "127.0.0.1", Redis: rdb, DLRTimeout: time.Minute})
+	m.Apply([]gateway.Config{c})
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { m.Run(ctx); close(done) }()
+
+	conn, r := rawConn(t, c) // binds, then never answers a deliver_sm
+	conn.Write(pdu.Encode(pdu.BindTransceiver, 0, 1, pdu.Bind{SystemID: c.SystemID, Password: string(c.Password), InterfaceVersion: 0x34}.Append(nil)))
+	if p, _ := r.Read(); p.Status != pdu.ESME_ROK {
+		t.Fatalf("bind: %v", p.Status)
+	}
+	for got := 0; got < 50; {
+		p, err := r.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.CommandID == pdu.DeliverSM {
+			got++
+		}
+	}
+	stop() // worker restart
+	<-done
+	if n := rdb.HLen(context.Background(), queueKey(c.ID)).Val(); n != 50 {
+		t.Fatalf("%d MOs queued for after the restart, want 50", n)
+	}
+}

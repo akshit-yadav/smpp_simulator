@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from tests.conftest import INTERNAL_TOKEN, needs_stores
 
 pytestmark = needs_stores
@@ -70,6 +72,17 @@ def test_rule_crud_and_validation(admin):
         json=rule(entries=[{"dlr_status": "DELIVRD", "dlr_error": "999", "weight_bp": 10000}]),
     )
     assert r.status_code == 422 and "999" in r.json()["detail"]
+    # Shares are whole percentages.
+    halves = [
+        {"dlr_status": "DELIVRD", "weight_bp": 5050},
+        {"dlr_status": "DELIVRD", "weight_bp": 4950},
+    ]
+    r = admin.post(url, json=rule(entries=halves))
+    assert r.status_code == 422 and "50.5% must be a whole percentage" in r.text
+    # An intermediate status as the rule's result would leave no final DLR.
+    for interim in ("ENROUTE", "ACCEPTD"):
+        r = admin.post(url, json=rule(entries=[{"dlr_status": interim, "weight_bp": 10000}]))
+        assert r.status_code == 422 and "intermediate status" in r.text, interim
 
     p = admin.post(url, json=rule()).json()
     assert [e["name"] for e in p["entries"]] == ["ok", "fail", "throttle"]
@@ -82,6 +95,29 @@ def test_rule_crud_and_validation(admin):
     one = rule(name="mix2", mode="fixed", seed=5, entries=[{"dlr_status": "DELIVRD"}])
     updated = admin.put(f"{url}/{p['id']}", json=one).json()
     assert updated["mode"] == "fixed" and len(updated["entries"]) == 1 and updated["seed"] is None
+
+    # Only weighted rules keep shares, so none come back stale on switching to weighted.
+    rnd = admin.put(f"{url}/{p['id']}", json=rule(name="mix2", mode="random")).json()
+    assert [e["weight_bp"] for e in rnd["entries"]] == [0, 0, 0]
+
+
+def test_concurrent_rule_saves_never_merge_entries(admin):
+    """Two admins saving one rule at once: the last save wins, whole. Its
+    entries are never added to the other save's (weights totalling 200%)."""
+    url = "/api/v1/dlr-rules"
+    p = admin.post(url, json=rule()).json()
+    bodies = [
+        rule(
+            entries=[{"dlr_status": "DELIVRD", "weight_bp": 10000 - 100 * i}]
+            + [{"dlr_status": "UNDELIV", "dlr_error": "001", "weight_bp": 100 * i}]
+        )
+        for i in range(1, 9)
+    ]
+    with ThreadPoolExecutor(len(bodies)) as pool:
+        codes = list(pool.map(lambda b: admin.put(f"{url}/{p['id']}", json=b).status_code, bodies))
+    assert set(codes) == {200}, codes
+    saved = admin.get(f"{url}/{p['id']}").json()
+    assert len(saved["entries"]) == 2 and sum(e["weight_bp"] for e in saved["entries"]) == 10000
 
 
 def test_rule_in_use_cannot_be_deleted(admin, worker):

@@ -77,3 +77,21 @@ func TestSetRateLive(t *testing.T) {
 		t.Fatalf("after lowering rate: %d allowed, want 5", got)
 	}
 }
+
+func TestMessageLargerThanBurst(t *testing.T) {
+	b, c := newTestBucket(2) // burst 2: a 3-part message never fits
+	if !b.AllowN(3) {
+		t.Fatal("a full bucket must pass a message larger than its burst")
+	}
+	if b.AllowN(1) {
+		t.Fatal("the oversized message is paid back before the next one")
+	}
+	c.advance(time.Second) // tokens -1 -> 1
+	if !b.AllowN(1) || b.AllowN(1) {
+		t.Fatal("after one second only one token is back")
+	}
+	c.advance(10 * time.Second)
+	if b.AllowN(3) != true || b.AllowN(3) {
+		t.Fatal("refill is capped at the burst")
+	}
+}

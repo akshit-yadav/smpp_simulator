@@ -2,9 +2,15 @@ import { useState } from "react";
 import { previewRule, useCommandStatuses, useDlrErrors } from "../api/queries";
 import type { DlrRuleInput, DlrStatus, Preview, RuleEntry } from "../api/types";
 import { fmtNum, hex } from "../lib/format";
-import { ErrorBox, Segmented, Term } from "./ui";
+import { ErrorBox, Segmented, Term, WholeInput } from "./ui";
 
-const DLR_STATUSES: DlrStatus[] = ["DELIVRD", "UNDELIV", "EXPIRED", "REJECTD", "DELETED", "UNKNOWN", "ACCEPTD", "ENROUTE"];
+// Final statuses only: ENROUTE and ACCEPTD are intermediate, so a message given
+// one would never get its final DLR (the gateway's Intermediate DLR sends them).
+const DLR_STATUSES: DlrStatus[] = ["DELIVRD", "UNDELIV", "EXPIRED", "REJECTD", "DELETED", "UNKNOWN"];
+const isFinal = (s: DlrStatus | null) => s !== null && DLR_STATUSES.includes(s);
+
+/** Whole-percent shares that total 100%, split as evenly as possible. */
+const evenShares = (n: number) => Array.from({ length: n }, (_, i) => (Math.floor(100 / n) + (i < 100 % n ? 1 : 0)) * 100);
 
 export const emptyEntry = (): RuleEntry => ({ name: "", command_status: 0, dlr_status: "DELIVRD", dlr_error: "000", weight_bp: 0 });
 
@@ -20,21 +26,29 @@ export const newRule = (): DlrRuleInput => ({
 /** Entries that Fixed mode ignores (all but the first). */
 export const ignoredEntries = (r: DlrRuleInput) => (r.mode === "fixed" ? Math.max(0, r.entries.length - 1) : 0);
 
-/** The rule as it is saved: Fixed mode keeps only its first entry and no seed. */
+/** The rule as it is saved: Fixed mode keeps only its first entry and no seed;
+ *  only Weighted mode keeps shares. */
 export function forSave(r: DlrRuleInput): DlrRuleInput {
-  return r.mode === "fixed" ? { ...r, seed: null, entries: r.entries.slice(0, 1) } : r;
+  const entries = r.mode === "weighted" ? r.entries : r.entries.map((e) => ({ ...e, weight_bp: 0 }));
+  return r.mode === "fixed" ? { ...r, seed: null, entries: entries.slice(0, 1) } : { ...r, entries };
 }
 
 /** Problems the API would reject, shown before saving. */
 export function ruleProblems(r: DlrRuleInput): string[] {
   const out: string[] = [];
   const used = r.mode === "fixed" ? r.entries.slice(0, 1) : r.entries;
+  if (r.mode !== "fixed" && Number.isNaN(r.seed)) out.push("Seed must be a whole number (0 or more).");
+  else if (r.seed !== null && r.seed > Number.MAX_SAFE_INTEGER) out.push(`Seed must be at most ${Number.MAX_SAFE_INTEGER}.`);
   if (r.mode === "weighted") {
+    const bad = r.entries.map((e, i) => (Number.isInteger(e.weight_bp / 100) && e.weight_bp <= 10000 ? -1 : i)).filter((i) => i >= 0);
+    bad.forEach((i) => out.push(`Entry ${i + 1}: the share must be a whole number from 0 to 100.`));
     const total = r.entries.reduce((s, e) => s + e.weight_bp, 0);
-    if (total !== 10000) out.push(`Shares total ${(total / 100).toFixed(2)}%; they must total 100%.`);
+    if (bad.length === 0 && total !== 10000) out.push(`Shares total ${total / 100}%; they must total 100%.`);
   }
   used.forEach((e, i) => {
     if (e.command_status === 0 && !e.dlr_status) out.push(`Entry ${i + 1}: choose a DLR status.`);
+    else if (e.command_status === 0 && !isFinal(e.dlr_status))
+      out.push(`Entry ${i + 1}: ${e.dlr_status} is an intermediate status, so the message would never get a final DLR. Choose a final status.`);
   });
   return out;
 }
@@ -45,15 +59,27 @@ export default function DlrRuleEditor({ value, onChange }: { value: DlrRuleInput
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewError, setPreviewError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  // The entry whose DLR status was just filled in from its DLR error, so the change is shown.
+  const [suggested, setSuggested] = useState<{ entry: number; status: DlrStatus; error: string } | null>(null);
 
   const set = (patch: Partial<DlrRuleInput>) => onChange({ ...value, ...patch });
-  const setEntry = (i: number, patch: Partial<RuleEntry>) => set({ entries: value.entries.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
+  const setEntry = (i: number, patch: Partial<RuleEntry>) => {
+    if (suggested?.entry === i) setSuggested(null);
+    set({ entries: value.entries.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
+  };
+  const setMode = (mode: DlrRuleInput["mode"]) => {
+    // Shares only live in Weighted mode: a rule coming from another mode has none, so start even.
+    const fresh = mode === "weighted" && value.entries.every((e) => e.weight_bp === 0);
+    const shares = evenShares(value.entries.length);
+    set({ mode, ...(fresh ? { entries: value.entries.map((e, i) => ({ ...e, weight_bp: shares[i] })) } : {}) });
+  };
 
   const fixed = value.mode === "fixed";
   const weighted = value.mode === "weighted";
   const ignored = ignoredEntries(value);
   const shown = fixed ? value.entries.slice(0, 1) : value.entries;
   const total = value.entries.reduce((s, e) => s + e.weight_bp, 0);
+  const problems = ruleProblems(value);
   const rejects = (statuses.data ?? []).filter((s) => s.code !== 0);
 
   const runPreview = async () => {
@@ -79,7 +105,7 @@ export default function DlrRuleEditor({ value, onChange }: { value: DlrRuleInput
           <Segmented
             label="Mode"
             value={value.mode}
-            onChange={(mode) => set({ mode })}
+            onChange={setMode}
             options={[
               { value: "fixed", label: "Fixed" },
               { value: "random", label: "Random" },
@@ -107,15 +133,7 @@ export default function DlrRuleEditor({ value, onChange }: { value: DlrRuleInput
               <Term info="seed">
                 <span className="field-label">Seed (optional)</span>
               </Term>
-              <input
-                className="input"
-                type="number"
-                min={0}
-                placeholder="random"
-                aria-label="Seed"
-                value={value.seed ?? ""}
-                onChange={(e) => set({ seed: e.target.value === "" ? null : Math.max(0, Math.floor(Number(e.target.value))) })}
-              />
+              <WholeInput placeholder="random" aria-label="Seed" value={value.seed} onChange={(seed) => set({ seed })} />
             </div>
           </>
         )}
@@ -181,11 +199,24 @@ export default function DlrRuleEditor({ value, onChange }: { value: DlrRuleInput
                   </td>
                   <td>
                     {accepted ? (
-                      <select className="input" aria-label={`Entry ${i + 1} DLR status`} value={e.dlr_status ?? ""} onChange={(ev) => setEntry(i, { dlr_status: ev.target.value as DlrStatus })}>
-                        {DLR_STATUSES.map((s) => (
-                          <option key={s}>{s}</option>
-                        ))}
-                      </select>
+                      <>
+                        <select
+                          className={`input ${isFinal(e.dlr_status) ? "" : "invalid"}`}
+                          aria-label={`Entry ${i + 1} DLR status`}
+                          value={e.dlr_status ?? ""}
+                          onChange={(ev) => setEntry(i, { dlr_status: ev.target.value as DlrStatus })}
+                        >
+                          {/* A rule saved before intermediate statuses were refused still shows its own. */}
+                          {[...DLR_STATUSES, ...(e.dlr_status && !isFinal(e.dlr_status) ? [e.dlr_status] : [])].map((s) => (
+                            <option key={s}>{s}</option>
+                          ))}
+                        </select>
+                        {suggested?.entry === i && (
+                          <div className="field-hint">
+                            Set to {suggested.status}, the status suggested for err:{suggested.error}.
+                          </div>
+                        )}
+                      </>
                     ) : (
                       <span className="muted small">No DLR (rejected)</span>
                     )}
@@ -198,7 +229,9 @@ export default function DlrRuleEditor({ value, onChange }: { value: DlrRuleInput
                         value={e.dlr_error ?? "000"}
                         onChange={(ev) => {
                           const err = errors.data?.find((x) => x.code === ev.target.value);
-                          setEntry(i, { dlr_error: ev.target.value, ...(err && ev.target.value !== "000" ? { dlr_status: err.suggested_status } : {}) });
+                          const status = err && err.code !== "000" && isFinal(err.suggested_status) && err.suggested_status !== e.dlr_status ? err.suggested_status : null;
+                          setEntry(i, { dlr_error: ev.target.value, ...(status ? { dlr_status: status } : {}) });
+                          setSuggested(status ? { entry: i, status, error: ev.target.value } : null);
                         }}
                       >
                         {(errors.data ?? []).map((x) => (
@@ -211,15 +244,11 @@ export default function DlrRuleEditor({ value, onChange }: { value: DlrRuleInput
                   </td>
                   {weighted && (
                     <td>
-                      <input
+                      <WholeInput
                         className="input num"
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.01}
                         aria-label={`Entry ${i + 1} share percent`}
                         value={e.weight_bp / 100}
-                        onChange={(ev) => setEntry(i, { weight_bp: Math.round(Math.max(0, Number(ev.target.value)) * 100) })}
+                        onChange={(v) => setEntry(i, { weight_bp: (v ?? 0) * 100 })}
                       />
                     </td>
                   )}
@@ -230,7 +259,10 @@ export default function DlrRuleEditor({ value, onChange }: { value: DlrRuleInput
                         className="btn sm ghost"
                         aria-label={`Remove entry ${i + 1}`}
                         disabled={value.entries.length === 1}
-                        onClick={() => set({ entries: value.entries.filter((_, j) => j !== i) })}
+                        onClick={() => {
+                          setSuggested(null);
+                          set({ entries: value.entries.filter((_, j) => j !== i) });
+                        }}
                       >
                         ✕
                       </button>
@@ -261,13 +293,13 @@ export default function DlrRuleEditor({ value, onChange }: { value: DlrRuleInput
               Add entry
             </button>
           )}
-          <button type="button" className="btn sm" onClick={runPreview} disabled={busy}>
+          <button type="button" className="btn sm" onClick={runPreview} disabled={busy || problems.length > 0} title={problems.join(" ")}>
             {busy ? "Simulating…" : "Preview 10,000 messages"}
           </button>
         </div>
         {weighted && (
           <span className={total === 10000 ? "weight-ok" : "weight-bad"}>
-            {total === 10000 ? "✓" : "✗"} Total {(total / 100).toFixed(2)}%
+            {total === 10000 ? "✓" : "✗"} Total {Number.isNaN(total) ? "—" : `${total / 100}%`}
           </span>
         )}
       </div>

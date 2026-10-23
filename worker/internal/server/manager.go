@@ -315,14 +315,23 @@ func (m *Manager) persistLoop(ctx context.Context) {
 
 func (m *Manager) shutdown() {
 	m.mu.Lock()
+	var sessions []*Session
 	for id, gw := range m.gateways {
+		sessions = append(sessions, gw.sessionList()...)
 		gw.stop("shutdown")
 		delete(m.gateways, id)
 	}
 	m.publish()
 	m.mu.Unlock()
-	// Keep undelivered DLRs: pending ones go to the queue so they survive a restart.
+	// Keep undelivered DLRs and MOs so they survive a restart: pending ones, and
+	// those the closing sessions still hold (their own requeue comes too late,
+	// with the gateways gone).
 	m.wheel.Drain(func(j *dlrJob) { m.queue.push(j) })
+	for _, s := range sessions {
+		for _, j := range s.undelivered() {
+			m.queue.push(j)
+		}
+	}
 	m.queue.persist(context.Background())
 }
 

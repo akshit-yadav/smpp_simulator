@@ -122,6 +122,17 @@ func (gw *Gateway) stop(reason string) {
 	gw.m.log.Info("gateway stopped", "gateway_id", gw.id, "reason", reason, "sessions", len(sessions))
 }
 
+// sessionList returns the gateway's sessions.
+func (gw *Gateway) sessionList() []*Session {
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	out := make([]*Session, 0, len(gw.sessions))
+	for s := range gw.sessions {
+		out = append(out, s)
+	}
+	return out
+}
+
 // reserveBind checks max binds and counts the session as bound.
 func (gw *Gateway) reserveBind(maxBinds int) bool {
 	gw.mu.Lock()

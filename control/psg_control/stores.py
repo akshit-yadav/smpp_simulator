@@ -5,6 +5,7 @@ import logging
 import redis
 from sqlalchemy import Engine, create_engine, text
 
+from psg_control.cache import TTLCache
 from psg_control.clickhouse import ClickHouse
 from psg_control.settings import Settings
 
@@ -20,6 +21,9 @@ class Stores:
             settings.mariadb_url,
             pool_pre_ping=True,
             pool_recycle=3600,
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_timeout=settings.db_pool_timeout_s,
             connect_args={"connect_timeout": CHECK_TIMEOUT_S},
         )
         self.redis = redis.Redis(
@@ -32,6 +36,7 @@ class Stores:
             decode_responses=True,
         )
         self.clickhouse = ClickHouse(settings)
+        self.live_cache = TTLCache(settings.live_cache_s)
 
     def close(self) -> None:
         self.db.dispose()

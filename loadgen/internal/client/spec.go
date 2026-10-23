@@ -178,7 +178,7 @@ type Result struct {
 	ErrorsLogged int              `json:"errors_logged"` // kept in the error log (capped)
 	Targets      []TargetResult   `json:"targets"`
 	PerSession   []SessionResult  `json:"per_session,omitempty"`
-	TraceFull    bool             `json:"trace_full,omitempty"` // the trace hit its cap: per-session figures are partial
+	TraceFull    bool             `json:"trace_full,omitempty"` // the trace misses PDUs (size cap, or the disk fell behind): per-session figures are partial
 	Timeline     []Second         `json:"timeline"`
 }
 

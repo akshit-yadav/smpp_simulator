@@ -143,8 +143,12 @@ func (gw *Gateway) moStep(run *moRun, now time.Time) *moRun {
 		m := run.builder.Next(run.seq+1, now)
 		if !gw.m.licence.Allow(len(m.Parts)) {
 			// Over the licence TPS cap: send no more this tick and pace from
-			// here, so the backlog is not sent as a burst later.
-			run.baseAt, run.baseSent = now, run.sent
+			// here, so the backlog is not sent as a burst later. The parts
+			// written off are counted, so the shortfall shows.
+			if cfg.Mode != gateway.MOBurst {
+				gw.stats.MOLicenceSkipped.Add(uint64(due))
+				run.baseAt, run.baseSent = now, run.sent
+			}
 			break
 		}
 		run.seq++

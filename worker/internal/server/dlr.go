@@ -186,7 +186,10 @@ func (m *Manager) dispatch(j *dlrJob) {
 		j.QueuedAt = time.Now()
 	}
 	m.recordQueued(j, events.DLRQueued)
-	m.queue.push(j)
+	if old := m.queue.push(j); old != nil { // the gateway's queue is full: its oldest expires
+		gw.stats.countDelivery(old, events.DLRExpired)
+		m.recordQueued(old, events.DLRExpired)
+	}
 }
 
 // recordQueued emits an event for a job entering, expiring from or (MO)
@@ -221,7 +224,10 @@ func (s *Session) dlrEvent(f *inflight, now time.Time, status pdu.Status, answer
 		TS: now, GatewayID: j.GatewayID, SessionID: s.id, MessageID: j.MsgID, Src: j.Src, Dst: j.Dst,
 		DLRStatus: j.Outcome.DLRStatus, DLRError: j.Outcome.DLRError, Attempt: attempt(j),
 		SubmitTS: j.SubmitAt, DelayMS: events.Millis(f.sentAt.Sub(j.SubmitAt)), Status: uint32(status),
-		Simulator: j.Sim || s.simulator, // an MO counts as simulator traffic when the simulator receives it
+		// Tagged by where the traffic came from, never by who receives it: an MO
+		// from PSG's generator stays in reports even when the tester takes it,
+		// like its queued and dropped rows.
+		Simulator: j.Sim,
 	}
 	if answered {
 		e.RespMS = events.Millis(now.Sub(f.sentAt))
@@ -335,34 +341,37 @@ func (s *Session) sweepTimeouts() {
 // in-flight ones without a response (the client may see those twice). It runs
 // twice to catch jobs handed over while the session was closing.
 func (s *Session) requeueDLRs() {
-	collect := func() []*dlrJob {
-		var jobs []*dlrJob
-		for {
-			select {
-			case j := <-s.dlrCh:
-				jobs = append(jobs, j)
-				continue
-			default:
-			}
-			break
-		}
-		s.pendMu.Lock()
-		for seq, f := range s.pending {
-			jobs = append(jobs, f.job)
-			delete(s.pending, seq)
-		}
-		s.pendMu.Unlock()
-		return jobs
-	}
 	go func() {
-		for _, j := range collect() {
+		for _, j := range s.undelivered() {
 			s.m.dispatch(j)
 		}
 		time.Sleep(200 * time.Millisecond)
-		for _, j := range collect() {
+		for _, j := range s.undelivered() {
 			s.m.dispatch(j)
 		}
 	}()
+}
+
+// undelivered takes the session's DLRs and MOs not yet acknowledged: queued
+// ones and in-flight ones without a response.
+func (s *Session) undelivered() []*dlrJob {
+	var jobs []*dlrJob
+	for {
+		select {
+		case j := <-s.dlrCh:
+			jobs = append(jobs, j)
+			continue
+		default:
+		}
+		break
+	}
+	s.pendMu.Lock()
+	for seq, f := range s.pending {
+		jobs = append(jobs, f.job)
+		delete(s.pending, seq)
+	}
+	s.pendMu.Unlock()
+	return jobs
 }
 
 // encodeDLR builds the deliver_sm receipt:

@@ -102,6 +102,7 @@ def settings(database, rdb) -> Settings:
         admin_username="admin",
         admin_password=ADMIN_PASSWORD,
         port_check_timeout_s=1.0,
+        live_cache_s=0,  # tests change worker data between polls
         lockout_minutes=5,
     )
 

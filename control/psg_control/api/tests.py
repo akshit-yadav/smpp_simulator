@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 
 ONLINE = timedelta(seconds=10)  # a tester heard from within this is online
 STALE = timedelta(seconds=60)  # a running test with no progress this long has failed
+STALE_ERROR = "The tester stopped reporting (crashed or lost the connection)."
 ERRORS_KEPT = 24 * 3600
 MAX_ERRORS = 10_000
 DLR = {"none": 0, "final": 1, "intermediate": 0x11}
@@ -65,19 +66,31 @@ def tester_out(t: Tester) -> dict:
     }
 
 
-def live(stores: Stores, run: TestRun) -> tuple[dict | None, list]:
-    """The last progress report and the live timeline (running tests only)."""
+TIMELINE_TAIL = 120  # points read first for an incremental timeline
+
+
+def live(stores: Stores, run: TestRun, since: int | None = None) -> tuple[dict | None, list]:
+    """The last progress report and the live timeline (running tests only).
+    since: only the points after this one (its t), for a panel that has the rest."""
     if run.status != "running":
         return None, []
     try:
         raw = stores.redis.get(prog_key(run.id))
-        line = stores.redis.lrange(line_key(run.id), 0, -1)
+        if since is None:
+            line = stores.redis.lrange(line_key(run.id), 0, -1)
+        else:  # usually the last few points do; read all only after a long gap
+            line = stores.redis.lrange(line_key(run.id), -TIMELINE_TAIL, -1)
+            if line and json.loads(line[0])["t"] > since:
+                line = stores.redis.lrange(line_key(run.id), 0, -1)
     except RedisError:
         return None, []
-    return (json.loads(raw) if raw else None), [json.loads(x) for x in line]
+    points = [json.loads(x) for x in line]
+    if since is not None:
+        points = [p for p in points if p["t"] > since]
+    return (json.loads(raw) if raw else None), points
 
 
-def run_out(stores: Stores, run: TestRun, full: bool = True) -> dict:
+def run_out(stores: Stores, run: TestRun, full: bool = True, since: int | None = None) -> dict:
     out = {
         "id": run.id,
         "tester_id": run.tester_id,
@@ -97,7 +110,9 @@ def run_out(stores: Stores, run: TestRun, full: bool = True) -> dict:
     )
     if full:
         out["result"] = run.result
-        out["progress"], out["timeline"] = live(stores, run)
+        out["progress"], out["timeline"] = live(stores, run, since)
+        if since is not None:
+            out["timeline_since"] = since  # the timeline holds only the newer points
     return out
 
 
@@ -117,7 +132,7 @@ def expire_stale(db: Session, stores: Stores) -> None:
             return
         if not alive and run.started_at and utcnow() - run.started_at > STALE:
             run.status, run.finished_at = "failed", utcnow()
-            run.error = "The tester stopped reporting (crashed or lost the connection)."
+            run.error = STALE_ERROR
     db.commit()
 
 
@@ -223,9 +238,10 @@ def start_test(body: TestIn, request: Request, db: DB, admin: Admin, stores: Sto
 
 
 @router.get("/tests/{run_id}")
-def get_test(run_id: int, db: DB, admin: Admin, stores: StoresDep):
+def get_test(run_id: int, db: DB, admin: Admin, stores: StoresDep, since: int | None = None):
+    """since: the t of the last timeline point the caller has; only newer ones come back."""
     expire_stale(db, stores)
-    return run_out(stores, get_run(db, run_id))
+    return run_out(stores, get_run(db, run_id), since=since)
 
 
 @router.post("/tests/{run_id}/stop")
@@ -403,14 +419,15 @@ def report_errors(run_id: int, body: list[dict], db: DB, stores: StoresDep):
 def report_result(run_id: int, body: dict, request: Request, db: DB, stores: StoresDep):
     """Final result (or error). Errors are kept 24 h or dropped now, as asked."""
     run = get_run(db, run_id)
-    if run.status in ("done", "stopped", "failed") and run.finished_at:
+    late = run.status == "failed" and run.error == STALE_ERROR  # the tester was only slow
+    if run.status in ("done", "stopped", "failed") and run.finished_at and not late:
         return  # a retried delivery
     result = body.get("result")
     run.finished_at = utcnow()
     if body.get("error") or result is None:
         run.status, run.error = "failed", body.get("error") or "No result."
     else:
-        run.result = result
+        run.result, run.error = result, None
         run.status = "stopped" if result.get("stopped") or run.stop_requested else "done"
     try:
         stores.redis.unlink(prog_key(run_id), line_key(run_id))

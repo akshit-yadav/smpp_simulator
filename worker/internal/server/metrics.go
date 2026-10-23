@@ -20,8 +20,9 @@ type Stats struct {
 	SessionsTX, SessionsRX, SessionsTRX               atomic.Int64
 
 	MOSent, MOAck, MORetried, MOFailed, MOQueued, MOExpired, MODropped atomic.Uint64
-	MOState                                                            atomic.Int32 // moStopped...moFinished
-	MORunID, MORunSent                                                 atomic.Int64 // current run and its parts sent
+	MOState                                                            atomic.Int32  // moStopped...moFinished
+	MOLicenceSkipped                                                   atomic.Uint64 // generator parts not sent: over the licence TPS cap
+	MORunID, MORunSent                                                 atomic.Int64  // current run and its parts sent
 }
 
 // countDelivery bumps the DLR or MO counter for a delivery result.
@@ -99,6 +100,8 @@ type MOSnapshot struct {
 	Queued  uint64 `json:"queued"`
 	Expired uint64 `json:"expired"`
 	Dropped uint64 `json:"dropped"`
+	// LicenceSkipped counts parts the generator did not send: over the licence TPS cap.
+	LicenceSkipped uint64 `json:"licence_skipped"`
 }
 
 func (s *Stats) Snapshot() StatsSnapshot {
@@ -114,6 +117,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 			State: moStateNames[s.MOState.Load()], RunID: s.MORunID.Load(), RunSent: s.MORunSent.Load(),
 			Sent: s.MOSent.Load(), Ack: s.MOAck.Load(), Retried: s.MORetried.Load(), Failed: s.MOFailed.Load(),
 			Queued: s.MOQueued.Load(), Expired: s.MOExpired.Load(), Dropped: s.MODropped.Load(),
+			LicenceSkipped: s.MOLicenceSkipped.Load(),
 		},
 	}
 }

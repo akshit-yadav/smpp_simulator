@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -274,5 +275,26 @@ func TestBindFailure(t *testing.T) {
 	}
 	if len(errs) != 2 || errs[0].Kind != "bind_failed" {
 		t.Fatalf("errors %+v", errs)
+	}
+}
+
+func TestTraceLineRoundTrip(t *testing.T) {
+	in := traceRec{ts: 1761200000123456, session: 42, kind: 'L', cmd: uint32(pdu.SubmitSMResp), seq: 4294967295, status: 0x58, lat: 1234}
+	line := string(in.append(nil))
+	if out, ok := parseTraceLine(strings.TrimSuffix(line, "\n")); !ok || out != in {
+		t.Fatalf("%q read back as %+v (ok %v)", line, out, ok)
+	}
+	for _, bad := range []string{"", "1 2 S", "1 2 SS 4 5 6 7", "x 2 S 4 5 6 7", "1 2 S 4 5 6 7 8"} {
+		if _, ok := parseTraceLine(bad); ok {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+}
+
+func BenchmarkTraceRead(b *testing.B) {
+	line := string(traceRec{ts: 1761200000123456, session: 7, kind: 'L', cmd: uint32(pdu.SubmitSMResp), seq: 123456, lat: 1234}.append(nil))
+	line = strings.TrimSuffix(line, "\n")
+	for b.Loop() {
+		parseTraceLine(line)
 	}
 }

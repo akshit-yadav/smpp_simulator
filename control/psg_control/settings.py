@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     login_max_failures: int = 5
     lockout_minutes: int = 5
     port_check_timeout_s: float = 3.0
+    # Capacity for many panel users at once.
+    db_pool_size: int = 20
+    db_max_overflow: int = 30
+    db_pool_timeout_s: float = 10.0
+    api_threads: int = 100  # request threads (sync handlers and dependencies)
+    live_cache_s: float = 1.0  # live worker data polled by the panel is shared this long
     licence_require_both: bool = False  # refuse a partial machine match (shared with workers)
     licence_file: str = "/etc/psg/licence.psglic"  # installed on start when none is installed
     # Footer usage figures: host /proc, and the host's cgroup tree (mounted

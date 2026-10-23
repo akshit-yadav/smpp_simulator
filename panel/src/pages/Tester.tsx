@@ -510,7 +510,7 @@ function ResultDetails({ res }: { res: TestResult }) {
           <button type="button" className="btn sm" onClick={() => setSessions(!sessions)}>
             {sessions ? "Hide" : "Show"} {res.per_session.length} sessions
           </button>
-          {res.trace_full && <span className="muted small"> The PDU trace hit its size cap: per-session figures cover the start of the run.</span>}
+          {res.trace_full && <span className="muted small"> The PDU trace missed some PDUs (size cap reached, or the disk fell behind): per-session figures are partial.</span>}
           {sessions && (
             <div className="table-wrap" style={{ marginTop: 8 }}>
               <table>

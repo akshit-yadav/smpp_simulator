@@ -15,10 +15,15 @@ router = APIRouter(tags=["live"])
 @router.get("/live")
 def live(db: DB, admin: Admin, stores: StoresDep):
     """Cumulative counters per gateway, plus each worker's DLR backlog.
-    Poll it and diff consecutive answers to get rates."""
+    Poll it and diff consecutive answers to get rates. Every open panel polls
+    it, so one answer is shared for live_cache_s."""
+    return stores.live_cache.get("live", lambda: live_view(db, stores))
+
+
+def live_view(db, stores) -> dict:
     workers, gateways = [], {}
     for w in db.scalars(select(Worker).order_by(Worker.id)):
-        stats = sync.live_json(stores, f"psg:stats:{w.id}") or {}
+        stats = sync.live_json(stores, f"psg:stats:{w.id}", shared=True) or {}
         workers.append(
             {
                 "id": w.id,
@@ -45,7 +50,7 @@ def _gateway(db, gateway_id: int) -> Gateway:
 def gateway_sessions(gateway_id: int, db: DB, admin: Admin, stores: StoresDep):
     """Bound SMPP sessions of a gateway, as last reported by its worker."""
     gw = _gateway(db, gateway_id)
-    sessions = sync.live_json(stores, f"psg:sessions:{gw.worker_id}") or []
+    sessions = sync.live_json(stores, f"psg:sessions:{gw.worker_id}", shared=True) or []
     return [s for s in sessions if s["gateway_id"] == gw.id]
 
 
