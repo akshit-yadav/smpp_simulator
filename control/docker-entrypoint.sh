@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-if [ "${FSG_AUTO_MIGRATE:-true}" = "true" ]; then
+if [ "${PSG_AUTO_MIGRATE:-true}" = "true" ]; then
   # Wait up to ~60 s for MariaDB; after that exit and let the restart policy retry.
   attempt=1
   until alembic -c /app/alembic.ini upgrade head 2>/tmp/migrate.err; do
@@ -16,4 +16,4 @@ if [ "${FSG_AUTO_MIGRATE:-true}" = "true" ]; then
   done
 fi
 
-exec python -m fsg_control "$@"
+exec python -m psg_control "$@"

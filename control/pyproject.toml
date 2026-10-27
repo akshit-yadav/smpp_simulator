@@ -3,9 +3,9 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fsg-control"
+name = "psg-control"
 version = "0.1.0"
-description = "Fake SMPP Gateway control plane: REST API, scheduler, licence and port checks, reports"
+description = "Power SMPP Gateway Simulator control plane: REST API, scheduler, licence and port checks, reports"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115,<1",
@@ -16,6 +16,9 @@ dependencies = [
     "alembic>=1.14,<2",
     "redis>=5.2,<7",
     "httpx>=0.27,<1",
+    "argon2-cffi>=23.1,<26",
+    "pyotp>=2.9,<3",
+    "cryptography>=43,<50",
 ]
 
 [project.optional-dependencies]
@@ -25,7 +28,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["fsg_control*"]
+include = ["psg_control*"]
 
 [tool.ruff]
 line-length = 100
@@ -36,7 +39,10 @@ select = ["E", "F", "I", "B", "UP", "S"]
 ignore = ["S104"]  # binding 0.0.0.0 is configurable on purpose
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+"tests/**" = ["S101", "S105", "S106", "E501"]
+# SQL there is built from constant fragments only; every value is a ClickHouse query parameter.
+"psg_control/api/reports.py" = ["S608"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:fastapi.testclient", "ignore:Using `httpx`"]

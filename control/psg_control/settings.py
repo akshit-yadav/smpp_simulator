@@ -1,0 +1,74 @@
+from functools import lru_cache
+
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import URL
+
+
+class Settings(BaseSettings):
+    """Control-plane settings, read from PSG_* environment variables."""
+
+    model_config = SettingsConfigDict(env_prefix="PSG_", extra="ignore")
+
+    http_host: str = "127.0.0.1"
+    http_port: int = 8080
+    log_level: str = "info"
+    panel_dir: str | None = None
+
+    secret_key: SecretStr | None = None
+    internal_token: SecretStr | None = None
+    tester_token: SecretStr | None = None  # for psg-tester agents only
+    admin_username: str = "admin"
+    admin_password: SecretStr | None = None
+    session_ttl_hours: int = 12
+    cookie_secure: bool = False  # set true when the panel is served over HTTPS
+    login_max_failures: int = 5
+    lockout_minutes: int = 5
+    port_check_timeout_s: float = 3.0
+    # Capacity for many panel users at once.
+    db_pool_size: int = 20
+    db_max_overflow: int = 30
+    db_pool_timeout_s: float = 10.0
+    api_threads: int = 100  # request threads (sync handlers and dependencies)
+    live_cache_s: float = 1.0  # live worker data polled by the panel is shared this long
+    licence_require_both: bool = False  # refuse a partial machine match (shared with workers)
+    licence_file: str = "/etc/psg/licence.psglic"  # installed on start when none is installed
+    # Footer usage figures: host /proc, and the host's cgroup tree (mounted
+    # read-only) holding PSG's containers in psg.slice.
+    proc_root: str = "/proc"
+    cgroup_root: str = "/host/cgroup"
+    cgroup_slice: str = "psg.slice"
+
+    mariadb_host: str = "127.0.0.1"
+    mariadb_port: int = 3306
+    mariadb_database: str = "psg"
+    mariadb_user: str = "psg"
+    mariadb_password: SecretStr = SecretStr("")
+
+    redis_host: str = "127.0.0.1"
+    redis_port: int = 6379
+    redis_password: SecretStr = SecretStr("")
+    redis_db: int = 0
+
+    clickhouse_host: str = "127.0.0.1"
+    clickhouse_http_port: int = 8123
+    clickhouse_database: str = "psg"
+    clickhouse_user: str = "default"
+    clickhouse_password: SecretStr = SecretStr("")
+
+    @property
+    def mariadb_url(self) -> URL:
+        return URL.create(
+            "mysql+pymysql",
+            username=self.mariadb_user,
+            password=self.mariadb_password.get_secret_value(),
+            host=self.mariadb_host,
+            port=self.mariadb_port,
+            database=self.mariadb_database,
+            query={"charset": "utf8mb4"},
+        )
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

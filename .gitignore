@@ -16,6 +16,7 @@ licences/
 licence.json
 
 # ---- Runtime data -------------------------------------------------------------
+config/
 data/
 spill/
 *.log
@@ -29,8 +30,8 @@ mem.out
 
 # ---- Go ----------------------------------------------------------------------
 bin/
-/worker/fsg-worker
-/loadgen/fsg-loadgen
+/worker/psg-worker
+/loadgen/psg-loadgen
 /tools/licgen/licgen
 *.exe
 *.test
